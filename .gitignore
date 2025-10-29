@@ -4,3 +4,8 @@ __pycache__
 .hypothesis/
 build/
 reports/
+ganache_db/
+build/
+__pycache__/
+.env
+*.pyc
