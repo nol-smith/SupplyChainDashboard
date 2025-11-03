@@ -67,6 +67,11 @@ class SupplyChainDashboard(QMainWindow):
         self.contract_label.setFont(QFont("Arial", 9))
         layout.addWidget(self.contract_label)
         
+        self.delivery_count_badge = QLabel("📦 Deliveries: 0")
+        self.delivery_count_badge.setFont(QFont("Arial", 10, QFont.Bold))
+        self.delivery_count_badge.setStyleSheet("background-color: #2196F3; color: white; padding: 5px 10px; border-radius: 5px;")
+        layout.addWidget(self.delivery_count_badge)
+        
         wipe_btn = QPushButton("Wipe Blockchain")
         wipe_btn.clicked.connect(self.wipe_blockchain)
         wipe_btn.setStyleSheet("background-color: #f44336; color: white; padding: 5px;")
@@ -84,7 +89,7 @@ class SupplyChainDashboard(QMainWindow):
         left_layout = QVBoxLayout()
         chart_label = QLabel("Delivery Status Distribution")
         chart_label.setAlignment(Qt.AlignCenter)
-        chart_label.setFont(QFont("Arial", 12, QFont.Bold))
+        chart_label.setFont(QFont("Arial", 16, QFont.Bold))
         left_layout.addWidget(chart_label)
         
         self.pie_figure = Figure(figsize=(4, 3))
@@ -94,7 +99,7 @@ class SupplyChainDashboard(QMainWindow):
         # Performance chart
         bar_label = QLabel("On-Time Performance")
         bar_label.setAlignment(Qt.AlignCenter)
-        bar_label.setFont(QFont("Arial", 12, QFont.Bold))
+        bar_label.setFont(QFont("Arial", 16, QFont.Bold))
         left_layout.addWidget(bar_label)
         
         self.bar_figure = Figure(figsize=(4, 3))
@@ -104,6 +109,17 @@ class SupplyChainDashboard(QMainWindow):
         refresh_chart_btn = QPushButton("Refresh Charts")
         refresh_chart_btn.clicked.connect(self.update_charts)
         left_layout.addWidget(refresh_chart_btn)
+        
+        # Average delivery time widget
+        avg_time_group = QGroupBox("Average Delivery Time")
+        avg_time_layout = QVBoxLayout()
+        self.avg_time_label = QLabel("--")
+        self.avg_time_label.setAlignment(Qt.AlignCenter)
+        self.avg_time_label.setFont(QFont("Arial", 24, QFont.Bold))
+        self.avg_time_label.setStyleSheet("color: #4CAF50; padding: 10px;")
+        avg_time_layout.addWidget(self.avg_time_label)
+        avg_time_group.setLayout(avg_time_layout)
+        left_layout.addWidget(avg_time_group)
         
         layout.addLayout(left_layout, 30)
         
@@ -148,6 +164,7 @@ class SupplyChainDashboard(QMainWindow):
             "Timestamp", "Expected Date", "Actual Date", "History"
         ])
         self.delivery_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.delivery_table.setSortingEnabled(True)
         self.delivery_table.horizontalHeader().setStretchLastSection(True)
         
         # Hide coordinate columns by default
@@ -391,6 +408,7 @@ class SupplyChainDashboard(QMainWindow):
                 pass
         
         self.statusBar().showMessage("Loaded first 10 deliveries from blockchain")
+        self.update_delivery_count()
         self.update_charts()
     
     def populate_table_row(self, row, delivery):
@@ -496,6 +514,7 @@ class SupplyChainDashboard(QMainWindow):
             
             QMessageBox.information(self, "Success", f"Delivery {delivery_id} added to blockchain!")
             self.clear_add_form()
+            self.load_deliveries()
             
         except ValueError as e:
             QMessageBox.warning(self, "Input Error", f"Invalid input:\n{str(e)}")
@@ -535,6 +554,7 @@ class SupplyChainDashboard(QMainWindow):
             self.update_log.append("-" * 50)
             
             QMessageBox.information(self, "Success", f"Status updated to: {new_status}")
+            self.load_deliveries()
             
         except Exception as e:
             self.update_log.append(f"✗ Error: {str(e)}")
@@ -562,6 +582,7 @@ class SupplyChainDashboard(QMainWindow):
             self.update_log.append("-" * 50)
             
             QMessageBox.information(self, "Success", f"Location updated!")
+            self.load_deliveries()
             
         except ValueError as e:
             QMessageBox.warning(self, "Input Error", f"Invalid input:\n{str(e)}")
@@ -619,12 +640,6 @@ class SupplyChainDashboard(QMainWindow):
         """Tab for interactive map visualization"""
         widget = QWidget()
         layout = QVBoxLayout()
-        
-        # Info
-        info = QLabel("Click 'Generate Interactive Map' to create a map with all deliveries and open it in your browser")
-        info.setWordWrap(True)
-        info.setStyleSheet("padding: 15px; background-color: #e3f2fd; border-radius: 5px; font-size: 12px;")
-        layout.addWidget(info)
         
         # Controls
         controls = QGroupBox("Map Controls")
@@ -804,10 +819,62 @@ class SupplyChainDashboard(QMainWindow):
             self.map_status.setText(f"Error: {str(e)}")
             QMessageBox.warning(self, "Map Error", f"Failed to generate map:\n{str(e)}")
     
+    def update_delivery_count(self):
+        """Update delivery count badge"""
+        if not self.bc:
+            return
+        
+        count = 0
+        for i in range(1, 101):
+            try:
+                delivery = self.bc.get_delivery(f'D{i:04d}')
+                if delivery['id']:
+                    count += 1
+            except:
+                pass
+        
+        self.delivery_count_badge.setText(f"📦 Deliveries: {count}")
+    
     def update_charts(self):
         """Update both pie chart and bar chart"""
         self.update_pie_chart()
         self.update_bar_chart()
+        self.update_avg_delivery_time()
+    
+    def update_avg_delivery_time(self):
+        """Calculate and display average delivery time"""
+        if not self.bc:
+            return
+        
+        try:
+            import time as time_module
+            total_time = 0
+            count = 0
+            
+            for i in range(1, 101):
+                delivery_id = f'D{i:04d}'
+                try:
+                    delivery = self.bc.get_delivery(delivery_id)
+                    if delivery['status'] == 'Delivered' and delivery['actual_delivery_date'] > 0:
+                        delivery_time = delivery['actual_delivery_date'] - delivery['timestamp']
+                        total_time += delivery_time
+                        count += 1
+                except:
+                    pass
+            
+            if count > 0:
+                avg_seconds = total_time / count
+                avg_hours = avg_seconds / 3600
+                avg_days = avg_hours / 24
+                
+                if avg_days >= 1:
+                    self.avg_time_label.setText(f"{avg_days:.1f} days")
+                else:
+                    self.avg_time_label.setText(f"{avg_hours:.1f} hours")
+            else:
+                self.avg_time_label.setText("No data")
+        except Exception as e:
+            print(f"Error calculating avg delivery time: {e}")
     
     def update_pie_chart(self):
         """Update pie chart with delivery status distribution"""
