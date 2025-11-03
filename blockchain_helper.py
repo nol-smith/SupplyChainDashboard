@@ -21,8 +21,11 @@ class BlockchainManager:
         
         self.account = accounts[0]
     
-    def add_delivery(self, delivery_id, origin_lat, origin_lon, dest_lat, dest_lon, status, current_lat, current_lon):
+    def add_delivery(self, delivery_id, origin_lat, origin_lon, dest_lat, dest_lon, status, current_lat, current_lon, expected_delivery_date=None):
         """Add a new delivery to blockchain"""
+        if expected_delivery_date is None:
+            # Default: 3 days from now
+            expected_delivery_date = int(time.time()) + (3 * 24 * 60 * 60)
         tx = self.contract.setDelivery(
             delivery_id,
             int(origin_lat * 1_000_000),
@@ -33,6 +36,7 @@ class BlockchainManager:
             int(time.time()),
             int(current_lat * 1_000_000),
             int(current_lon * 1_000_000),
+            expected_delivery_date,
             {'from': self.account}
         )
         return tx
@@ -49,7 +53,9 @@ class BlockchainManager:
             'status': delivery[5],
             'timestamp': delivery[6],
             'current_lat': delivery[7] / 1_000_000,
-            'current_lon': delivery[8] / 1_000_000
+            'current_lon': delivery[8] / 1_000_000,
+            'expected_delivery_date': delivery[9],
+            'actual_delivery_date': delivery[10]
         }
     
     def update_status(self, delivery_id, new_status):

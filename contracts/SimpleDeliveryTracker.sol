@@ -12,6 +12,8 @@ contract SimpleDeliveryTracker {
         uint256 timestamp;
         int256 currentLat;
         int256 currentLon;
+        uint256 expectedDeliveryDate;
+        uint256 actualDeliveryDate;
     }
     
     mapping(string => Delivery) public deliveries;
@@ -26,9 +28,10 @@ contract SimpleDeliveryTracker {
         string memory _status,
         uint256 _timestamp,
         int256 _currentLat,
-        int256 _currentLon
+        int256 _currentLon,
+        uint256 _expectedDeliveryDate
     ) public {
-        deliveries[_id] = Delivery(_id, _originLat, _originLon, _destLat, _destLon, _status, _timestamp, _currentLat, _currentLon);
+        deliveries[_id] = Delivery(_id, _originLat, _originLon, _destLat, _destLon, _status, _timestamp, _currentLat, _currentLon, _expectedDeliveryDate, 0);
     }
     
     // Get complete delivery
@@ -41,15 +44,21 @@ contract SimpleDeliveryTracker {
         string memory,
         uint256,
         int256,
-        int256
+        int256,
+        uint256,
+        uint256
     ) {
         Delivery memory d = deliveries[_id];
-        return (d.deliveryId, d.originLat, d.originLon, d.destLat, d.destLon, d.status, d.timestamp, d.currentLat, d.currentLon);
+        return (d.deliveryId, d.originLat, d.originLon, d.destLat, d.destLon, d.status, d.timestamp, d.currentLat, d.currentLon, d.expectedDeliveryDate, d.actualDeliveryDate);
     }
     
     // Set status only
     function setStatus(string memory _id, string memory _status) public {
         deliveries[_id].status = _status;
+        // Auto-set actual delivery date when marked as delivered
+        if (keccak256(bytes(_status)) == keccak256(bytes("Delivered")) && deliveries[_id].actualDeliveryDate == 0) {
+            deliveries[_id].actualDeliveryDate = block.timestamp;
+        }
     }
     
     // Get status only

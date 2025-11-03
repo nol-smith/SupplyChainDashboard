@@ -9,6 +9,11 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from blockchain_helper import BlockchainManager
+import matplotlib
+matplotlib.use('Qt5Agg')
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 class SupplyChainDashboard(QMainWindow):
     def __init__(self):
@@ -73,7 +78,37 @@ class SupplyChainDashboard(QMainWindow):
     def create_view_tab(self):
         """Tab for viewing deliveries"""
         widget = QWidget()
-        layout = QVBoxLayout()
+        layout = QHBoxLayout()
+        
+        # Left side - charts
+        left_layout = QVBoxLayout()
+        chart_label = QLabel("Delivery Status Distribution")
+        chart_label.setAlignment(Qt.AlignCenter)
+        chart_label.setFont(QFont("Arial", 12, QFont.Bold))
+        left_layout.addWidget(chart_label)
+        
+        self.pie_figure = Figure(figsize=(4, 3))
+        self.pie_canvas = FigureCanvas(self.pie_figure)
+        left_layout.addWidget(self.pie_canvas)
+        
+        # Performance chart
+        bar_label = QLabel("On-Time Performance")
+        bar_label.setAlignment(Qt.AlignCenter)
+        bar_label.setFont(QFont("Arial", 12, QFont.Bold))
+        left_layout.addWidget(bar_label)
+        
+        self.bar_figure = Figure(figsize=(4, 3))
+        self.bar_canvas = FigureCanvas(self.bar_figure)
+        left_layout.addWidget(self.bar_canvas)
+        
+        refresh_chart_btn = QPushButton("Refresh Charts")
+        refresh_chart_btn.clicked.connect(self.update_charts)
+        left_layout.addWidget(refresh_chart_btn)
+        
+        layout.addLayout(left_layout, 30)
+        
+        # Right side - table
+        right_layout = QVBoxLayout()
         
         # Search section
         search_layout = QHBoxLayout()
@@ -91,17 +126,20 @@ class SupplyChainDashboard(QMainWindow):
         search_layout.addWidget(load_all_btn)
         
         search_layout.addStretch()
-        layout.addLayout(search_layout)
+        right_layout.addLayout(search_layout)
         
         # Table
         self.delivery_table = QTableWidget()
-        self.delivery_table.setColumnCount(9)
+        self.delivery_table.setColumnCount(11)
         self.delivery_table.setHorizontalHeaderLabels([
             "ID", "Status", "Origin Lat", "Origin Lon", 
-            "Dest Lat", "Dest Lon", "Current Lat", "Current Lon", "Timestamp"
+            "Dest Lat", "Dest Lon", "Current Lat", "Current Lon", 
+            "Timestamp", "Expected Date", "Actual Date"
         ])
         self.delivery_table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.delivery_table)
+        right_layout.addWidget(self.delivery_table)
+        
+        layout.addLayout(right_layout, 70)
         
         widget.setLayout(layout)
         return widget
@@ -166,6 +204,16 @@ class SupplyChainDashboard(QMainWindow):
         status_layout.addWidget(self.add_status)
         status_layout.addStretch()
         form_layout.addLayout(status_layout)
+        
+        # Expected delivery days
+        days_layout = QHBoxLayout()
+        days_layout.addWidget(QLabel("Expected Delivery (days from now):"))
+        self.add_expected_days = QLineEdit()
+        self.add_expected_days.setPlaceholderText("3")
+        self.add_expected_days.setMaximumWidth(100)
+        days_layout.addWidget(self.add_expected_days)
+        days_layout.addStretch()
+        form_layout.addLayout(days_layout)
         
         # Add button
         add_btn = QPushButton("Add to Blockchain")
@@ -320,20 +368,22 @@ class SupplyChainDashboard(QMainWindow):
                 pass
         
         self.statusBar().showMessage("Loaded first 10 deliveries from blockchain")
+        self.update_charts()
     
     def populate_table_row(self, row, delivery):
         """Populate a table row with delivery data"""
         from PySide6.QtGui import QColor
+        from datetime import datetime
         
         self.delivery_table.setItem(row, 0, QTableWidgetItem(delivery['id']))
         
         # Color-coded status
         status_item = QTableWidgetItem(delivery['status'])
         color_map = {
-            'In Transit': QColor(173, 216, 230),
-            'Delivered': QColor(144, 238, 144),
-            'Delayed': QColor(255, 182, 193),
-            'Preparing for Shipment': QColor(255, 218, 185)
+            'In Transit': QColor(0, 0, 139),
+            'Delivered': QColor(0, 100, 0),
+            'Delayed': QColor(220, 20, 60),
+            'Preparing for Shipment': QColor(255, 140, 0)
         }
         if delivery['status'] in color_map:
             status_item.setBackground(color_map[delivery['status']])
@@ -346,6 +396,14 @@ class SupplyChainDashboard(QMainWindow):
         self.delivery_table.setItem(row, 6, QTableWidgetItem(f"{delivery['current_lat']:.4f}"))
         self.delivery_table.setItem(row, 7, QTableWidgetItem(f"{delivery['current_lon']:.4f}"))
         self.delivery_table.setItem(row, 8, QTableWidgetItem(str(delivery['timestamp'])))
+        
+        # Expected delivery date
+        expected_str = datetime.fromtimestamp(delivery['expected_delivery_date']).strftime('%Y-%m-%d %H:%M') if delivery['expected_delivery_date'] > 0 else 'N/A'
+        self.delivery_table.setItem(row, 9, QTableWidgetItem(expected_str))
+        
+        # Actual delivery date
+        actual_str = datetime.fromtimestamp(delivery['actual_delivery_date']).strftime('%Y-%m-%d %H:%M') if delivery['actual_delivery_date'] > 0 else 'N/A'
+        self.delivery_table.setItem(row, 10, QTableWidgetItem(actual_str))
     
     def add_delivery(self):
         """Add new delivery to blockchain"""
@@ -354,6 +412,8 @@ class SupplyChainDashboard(QMainWindow):
             return
         
         try:
+            import time as time_module
+            
             delivery_id = self.add_id.text().strip()
             origin_lat = float(self.add_origin_lat.text())
             origin_lon = float(self.add_origin_lon.text())
@@ -363,15 +423,21 @@ class SupplyChainDashboard(QMainWindow):
             current_lon = float(self.add_current_lon.text())
             status = self.add_status.currentText()
             
+            # Expected delivery date
+            days_text = self.add_expected_days.text().strip()
+            days = int(days_text) if days_text else 3
+            expected_date = int(time_module.time()) + (days * 24 * 60 * 60)
+            
             if not delivery_id:
                 raise ValueError("Delivery ID is required")
             
             self.add_log.append(f"Adding {delivery_id} to blockchain...")
             tx = self.bc.add_delivery(delivery_id, origin_lat, origin_lon, dest_lat, 
-                                     dest_lon, status, current_lat, current_lon)
+                                     dest_lon, status, current_lat, current_lon, expected_date)
             
             self.add_log.append(f"✓ Success! Transaction: {tx.txid}")
             self.add_log.append(f"  Status: {status}")
+            self.add_log.append(f"  Expected in {days} days")
             self.add_log.append("-" * 50)
             
             QMessageBox.information(self, "Success", f"Delivery {delivery_id} added to blockchain!")
@@ -447,6 +513,7 @@ class SupplyChainDashboard(QMainWindow):
         self.add_dest_lon.clear()
         self.add_current_lat.clear()
         self.add_current_lon.clear()
+        self.add_expected_days.clear()
     
     def wipe_blockchain(self):
         """Wipe blockchain by restarting Ganache and redeploying contract"""
@@ -550,33 +617,54 @@ class SupplyChainDashboard(QMainWindow):
                     
                     # Color based on status
                     color_map = {
-                        'In Transit': 'blue',
-                        'Delivered': 'green',
-                        'Delayed': 'red',
-                        'Preparing for Shipment': 'orange'
+                        'In Transit': '#00008B',
+                        'Delivered': '#006400',
+                        'Delayed': '#DC143C',
+                        'Preparing for Shipment': '#FF8C00'
                     }
-                    color = color_map.get(delivery['status'], 'gray')
+                    hex_color = color_map.get(delivery['status'], 'gray')
                     
-                    # Add marker for current location
+                    # Origin marker (small circle)
+                    folium.CircleMarker(
+                        location=[delivery['origin_lat'], delivery['origin_lon']],
+                        radius=5,
+                        popup=f"<b>Origin</b><br>{delivery['id']}",
+                        color='gray',
+                        fill=True,
+                        fillColor='white',
+                        fillOpacity=0.8
+                    ).add_to(m)
+                    
+                    # Destination marker (star)
+                    folium.Marker(
+                        location=[delivery['dest_lat'], delivery['dest_lon']],
+                        popup=f"<b>Destination</b><br>{delivery['id']}",
+                        icon=folium.Icon(color='black', icon='star', prefix='fa')
+                    ).add_to(m)
+                    
+                    # Current location marker (truck) with custom color
                     folium.Marker(
                         location=[delivery['current_lat'], delivery['current_lon']],
                         popup=f"""<b>{delivery['id']}</b><br>
                                   Status: {delivery['status']}<br>
                                   Current: ({delivery['current_lat']:.2f}, {delivery['current_lon']:.2f})<br>
+                                  Origin: ({delivery['origin_lat']:.2f}, {delivery['origin_lon']:.2f})<br>
                                   Destination: ({delivery['dest_lat']:.2f}, {delivery['dest_lon']:.2f})""",
                         tooltip=f"{delivery['id']}: {delivery['status']}",
-                        icon=folium.Icon(color=color, icon='truck', prefix='fa')
+                        icon=folium.DivIcon(html=f'<div style="font-size: 24px; color: {hex_color};"><i class="fa fa-truck"></i></div>')
                     ).add_to(m)
                     
-                    # Draw line from current to destination
+                    # Draw route: origin -> current -> destination
                     folium.PolyLine(
                         locations=[
+                            [delivery['origin_lat'], delivery['origin_lon']],
                             [delivery['current_lat'], delivery['current_lon']],
                             [delivery['dest_lat'], delivery['dest_lon']]
                         ],
-                        color=color,
+                        color=hex_color,
                         weight=2,
-                        opacity=0.5
+                        opacity=0.6,
+                        dash_array='5, 10'
                     ).add_to(m)
                     
                     delivery_count += 1
@@ -586,14 +674,16 @@ class SupplyChainDashboard(QMainWindow):
             # Add legend
             legend_html = '''
             <div style="position: fixed; 
-                        bottom: 50px; right: 50px; width: 200px; height: 150px; 
+                        bottom: 50px; right: 50px; width: 220px; height: 200px; 
                         background-color: white; border:2px solid grey; z-index:9999; 
-                        font-size:14px; padding: 10px">
-            <p><b>Delivery Status</b></p>
-            <p><i class="fa fa-truck" style="color:blue"></i> In Transit</p>
-            <p><i class="fa fa-truck" style="color:green"></i> Delivered</p>
-            <p><i class="fa fa-truck" style="color:red"></i> Delayed</p>
-            <p><i class="fa fa-truck" style="color:orange"></i> Preparing</p>
+                        font-size:13px; padding: 10px">
+            <p><b>Map Legend</b></p>
+            <p><i class="fa fa-circle" style="color:gray"></i> Origin</p>
+            <p><i class="fa fa-star" style="color:black"></i> Destination</p>
+            <p><i class="fa fa-truck" style="color:#00008B"></i> In Transit</p>
+            <p><i class="fa fa-truck" style="color:#006400"></i> Delivered</p>
+            <p><i class="fa fa-truck" style="color:#DC143C"></i> Delayed</p>
+            <p><i class="fa fa-truck" style="color:#FF8C00"></i> Preparing</p>
             </div>
             '''
             m.get_root().html.add_child(folium.Element(legend_html))
@@ -613,6 +703,113 @@ class SupplyChainDashboard(QMainWindow):
         except Exception as e:
             self.map_status.setText(f"Error: {str(e)}")
             QMessageBox.warning(self, "Map Error", f"Failed to generate map:\n{str(e)}")
+    
+    def update_charts(self):
+        """Update both pie chart and bar chart"""
+        self.update_pie_chart()
+        self.update_bar_chart()
+    
+    def update_pie_chart(self):
+        """Update pie chart with delivery status distribution"""
+        if not self.bc:
+            return
+        
+        try:
+            status_counts = {'In Transit': 0, 'Delivered': 0, 'Delayed': 0, 'Preparing for Shipment': 0}
+            
+            for i in range(1, 101):
+                delivery_id = f'D{i:04d}'
+                try:
+                    delivery = self.bc.get_delivery(delivery_id)
+                    if delivery['id'] and delivery['status'] in status_counts:
+                        status_counts[delivery['status']] += 1
+                except:
+                    pass
+            
+            self.pie_figure.clear()
+            ax = self.pie_figure.add_subplot(111)
+            
+            labels = []
+            sizes = []
+            colors = []
+            color_map = {'In Transit': '#00008B', 'Delivered': '#006400', 'Delayed': '#DC143C', 'Preparing for Shipment': '#FF8C00'}
+            
+            for status, count in status_counts.items():
+                if count > 0:
+                    labels.append(f"{status}\n({count})")
+                    sizes.append(count)
+                    colors.append(color_map[status])
+            
+            if sizes:
+                ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90, 
+                      textprops={'fontsize': 7}, pctdistance=0.85, labeldistance=1.05)
+                ax.axis('equal')
+            else:
+                ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
+            
+            self.pie_figure.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+            self.pie_canvas.draw()
+        except Exception as e:
+            print(f"Error updating pie chart: {e}")
+    
+    def update_bar_chart(self):
+        """Update bar chart with on-time performance"""
+        if not self.bc:
+            return
+        
+        try:
+            import time as time_module
+            current_time = int(time_module.time())
+            
+            performance = {'On-Time': 0, 'Late': 0, 'At Risk': 0, 'On Track': 0}
+            
+            for i in range(1, 101):
+                delivery_id = f'D{i:04d}'
+                try:
+                    delivery = self.bc.get_delivery(delivery_id)
+                    if not delivery['id']:
+                        continue
+                    
+                    expected = delivery['expected_delivery_date']
+                    actual = delivery['actual_delivery_date']
+                    
+                    if delivery['status'] == 'Delivered':
+                        if actual > 0 and actual <= expected:
+                            performance['On-Time'] += 1
+                        else:
+                            performance['Late'] += 1
+                    else:
+                        if current_time > expected:
+                            performance['At Risk'] += 1
+                        else:
+                            performance['On Track'] += 1
+                except:
+                    pass
+            
+            self.bar_figure.clear()
+            ax = self.bar_figure.add_subplot(111)
+            
+            categories = list(performance.keys())
+            counts = list(performance.values())
+            colors = ['#006400', '#DC143C', '#FF8C00', '#00008B']
+            
+            if sum(counts) > 0:
+                bars = ax.barh(categories, counts, color=colors)
+                ax.set_xlabel('Count', fontsize=9)
+                ax.tick_params(axis='both', labelsize=8)
+                ax.grid(True, alpha=0.3, axis='x')
+                
+                for bar, count in zip(bars, counts):
+                    if count > 0:
+                        ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2, 
+                               f' {count}', va='center', fontsize=9, fontweight='bold')
+            else:
+                ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
+            
+            self.bar_figure.tight_layout()
+            self.bar_canvas.draw()
+        except Exception as e:
+            print(f"Error updating bar chart: {e}")
     
     def closeEvent(self, event):
         """Handle window close"""
