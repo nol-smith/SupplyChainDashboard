@@ -58,9 +58,9 @@ class BlockchainManager:
             'actual_delivery_date': delivery[10]
         }
     
-    def update_status(self, delivery_id, new_status):
+    def update_status(self, delivery_id, new_status, reason=""):
         """Update delivery status"""
-        tx = self.contract.setStatus(delivery_id, new_status, {'from': self.account})
+        tx = self.contract.setStatus(delivery_id, new_status, reason, {'from': self.account})
         return tx
     
     def update_location(self, delivery_id, lat, lon):
@@ -84,3 +84,13 @@ class BlockchainManager:
             'lat': location[0] / 1_000_000,
             'lon': location[1] / 1_000_000
         }
+    
+    def get_status_history(self, delivery_id):
+        """Get status update history"""
+        history = self.contract.getStatusHistory(delivery_id)
+        return [{'status': h[0], 'timestamp': h[1], 'reason': h[2]} for h in history]
+    
+    def get_location_history(self, delivery_id):
+        """Get location update history"""
+        history = self.contract.getLocationHistory(delivery_id)
+        return [{'lat': h[0] / 1_000_000, 'lon': h[1] / 1_000_000, 'timestamp': h[2]} for h in history]

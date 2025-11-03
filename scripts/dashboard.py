@@ -141,14 +141,23 @@ class SupplyChainDashboard(QMainWindow):
         
         # Table
         self.delivery_table = QTableWidget()
-        self.delivery_table.setColumnCount(12)
+        self.delivery_table.setColumnCount(13)
         self.delivery_table.setHorizontalHeaderLabels([
             "ID", "Status", "On-Time Status", "Origin Lat", "Origin Lon", 
             "Dest Lat", "Dest Lon", "Current Lat", "Current Lon", 
-            "Timestamp", "Expected Date", "Actual Date"
+            "Timestamp", "Expected Date", "Actual Date", "History"
         ])
         self.delivery_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.delivery_table.horizontalHeader().setStretchLastSection(True)
+        
+        # Hide coordinate columns by default
+        self.delivery_table.setColumnHidden(3, True)  # Origin Lat
+        self.delivery_table.setColumnHidden(4, True)  # Origin Lon
+        self.delivery_table.setColumnHidden(5, True)  # Dest Lat
+        self.delivery_table.setColumnHidden(6, True)  # Dest Lon
+        self.delivery_table.setColumnHidden(7, True)  # Current Lat
+        self.delivery_table.setColumnHidden(8, True)  # Current Lon
+        
         right_layout.addWidget(self.delivery_table)
         
         layout.addLayout(right_layout, 70)
@@ -443,6 +452,12 @@ class SupplyChainDashboard(QMainWindow):
         # Actual delivery date
         actual_str = datetime.fromtimestamp(delivery['actual_delivery_date']).strftime('%Y-%m-%d %H:%M') if delivery['actual_delivery_date'] > 0 else 'N/A'
         self.delivery_table.setItem(row, 11, QTableWidgetItem(actual_str))
+        
+        # View History button
+        history_btn = QPushButton("View History")
+        history_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 5px;")
+        history_btn.clicked.connect(lambda checked, d_id=delivery['id']: self.view_delivery_history(d_id))
+        self.delivery_table.setCellWidget(row, 12, history_btn)
     
     def add_delivery(self):
         """Add new delivery to blockchain"""
@@ -495,16 +510,27 @@ class SupplyChainDashboard(QMainWindow):
             return
         
         try:
+            from PySide6.QtWidgets import QInputDialog
+            
             delivery_id = self.update_status_id.text().strip()
             new_status = self.update_status_combo.currentText()
             
             if not delivery_id:
                 raise ValueError("Delivery ID is required")
             
+            reason = ""
+            if new_status == "Delayed":
+                reason, ok = QInputDialog.getText(self, "Delay Reason", "Please enter reason for delay:")
+                if not ok or not reason:
+                    QMessageBox.warning(self, "Required", "Delay reason is required")
+                    return
+            
             self.update_log.append(f"Updating status for {delivery_id}...")
-            tx = self.bc.update_status(delivery_id, new_status)
+            tx = self.bc.update_status(delivery_id, new_status, reason)
             
             self.update_log.append(f"✓ Status updated to: {new_status}")
+            if reason:
+                self.update_log.append(f"  Reason: {reason}")
             self.update_log.append(f"  Transaction: {tx.txid}")
             self.update_log.append("-" * 50)
             
@@ -892,6 +918,62 @@ class SupplyChainDashboard(QMainWindow):
             self.bar_canvas.draw()
         except Exception as e:
             print(f"Error updating bar chart: {e}")
+    
+    def view_delivery_history(self, delivery_id):
+        """View delivery update history"""
+        if not self.bc:
+            return
+        
+        try:
+            from PySide6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QDialogButtonBox
+            from datetime import datetime
+            
+            status_history = self.bc.get_status_history(delivery_id)
+            location_history = self.bc.get_location_history(delivery_id)
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle(f"Update History - {delivery_id}")
+            dialog.setMinimumSize(500, 400)
+            layout = QVBoxLayout()
+            
+            history_text = QTextEdit()
+            history_text.setReadOnly(True)
+            
+            content = f"<h2>Delivery History: {delivery_id}</h2>"
+            
+            if status_history:
+                content += "<h3>Status Updates:</h3><ul>"
+                for update in reversed(status_history):
+                    timestamp = datetime.fromtimestamp(update['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+                    content += f"<li><b>{timestamp}</b> - Status changed to: <b>{update['status']}</b>"
+                    if update.get('reason'):
+                        content += f"<br>&nbsp;&nbsp;&nbsp;&nbsp;<i>Reason: {update['reason']}</i>"
+                    content += "</li>"
+                content += "</ul>"
+            else:
+                content += "<p>No status updates recorded.</p>"
+            
+            if location_history:
+                content += "<h3>Location Updates:</h3><ul>"
+                for update in reversed(location_history):
+                    timestamp = datetime.fromtimestamp(update['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+                    content += f"<li><b>{timestamp}</b> - Location: ({update['lat']:.4f}, {update['lon']:.4f})</li>"
+                content += "</ul>"
+            else:
+                content += "<p>No location updates recorded.</p>"
+            
+            history_text.setHtml(content)
+            layout.addWidget(history_text)
+            
+            buttons = QDialogButtonBox(QDialogButtonBox.Close)
+            buttons.rejected.connect(dialog.reject)
+            layout.addWidget(buttons)
+            
+            dialog.setLayout(layout)
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load history:\n{str(e)}")
     
     def toggle_columns(self):
         """Show dialog to hide/show columns"""
