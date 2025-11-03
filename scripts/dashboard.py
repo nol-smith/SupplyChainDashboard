@@ -604,9 +604,34 @@ class SupplyChainDashboard(QMainWindow):
         controls = QGroupBox("Map Controls")
         controls_layout = QVBoxLayout()
         
+        # Status filters
+        filter_label = QLabel("Filter by Status:")
+        filter_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        controls_layout.addWidget(filter_label)
+        
+        filter_layout = QHBoxLayout()
+        from PySide6.QtWidgets import QCheckBox
+        self.filter_in_transit = QCheckBox("In Transit")
+        self.filter_in_transit.setChecked(True)
+        filter_layout.addWidget(self.filter_in_transit)
+        
+        self.filter_delivered = QCheckBox("Delivered")
+        self.filter_delivered.setChecked(True)
+        filter_layout.addWidget(self.filter_delivered)
+        
+        self.filter_delayed = QCheckBox("Delayed")
+        self.filter_delayed.setChecked(True)
+        filter_layout.addWidget(self.filter_delayed)
+        
+        self.filter_preparing = QCheckBox("Preparing")
+        self.filter_preparing.setChecked(True)
+        filter_layout.addWidget(self.filter_preparing)
+        
+        controls_layout.addLayout(filter_layout)
+        
         gen_btn = QPushButton("Generate Interactive Map")
         gen_btn.clicked.connect(self.generate_and_open_map)
-        gen_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 20px; font-size: 18px; font-weight: bold;")
+        gen_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 20px; font-size: 18px; font-weight: bold; margin-top: 10px;")
         controls_layout.addWidget(gen_btn)
         
         self.map_status = QLabel("Map: Not generated")
@@ -616,22 +641,6 @@ class SupplyChainDashboard(QMainWindow):
         
         controls.setLayout(controls_layout)
         layout.addWidget(controls)
-        
-        # Features list
-        features = QGroupBox("Interactive Map Features")
-        features_layout = QVBoxLayout()
-        features_text = QLabel(
-            "• Color-coded delivery markers by status\n"
-            "• Click markers for delivery details\n"
-            "• Lines showing route to destination\n"
-            "• Zoom and pan controls\n"
-            "• Legend with status colors\n"
-            "• Real-time data from blockchain"
-        )
-        features_text.setStyleSheet("font-size: 12px; padding: 10px;")
-        features_layout.addWidget(features_text)
-        features.setLayout(features_layout)
-        layout.addWidget(features)
         
         layout.addStretch()
         widget.setLayout(layout)
@@ -647,12 +656,27 @@ class SupplyChainDashboard(QMainWindow):
             # Create map centered on US
             m = folium.Map(location=[39.8283, -98.5795], zoom_start=4)
             
+            # Get selected filters
+            show_statuses = []
+            if self.filter_in_transit.isChecked():
+                show_statuses.append('In Transit')
+            if self.filter_delivered.isChecked():
+                show_statuses.append('Delivered')
+            if self.filter_delayed.isChecked():
+                show_statuses.append('Delayed')
+            if self.filter_preparing.isChecked():
+                show_statuses.append('Preparing for Shipment')
+            
             # Load deliveries and add markers
             delivery_count = 0
             for i in range(1, 101):  # Try first 100 deliveries
                 delivery_id = f'D{i:04d}'
                 try:
                     delivery = self.bc.get_delivery(delivery_id)
+                    
+                    # Filter by selected statuses
+                    if delivery['status'] not in show_statuses:
+                        continue
                     
                     # Color based on status
                     color_map = {
@@ -681,15 +705,26 @@ class SupplyChainDashboard(QMainWindow):
                         icon=folium.Icon(color='black', icon='star', prefix='fa')
                     ).add_to(m)
                     
+                    # Calculate distance to destination (Haversine formula)
+                    import math
+                    lat1, lon1 = math.radians(delivery['current_lat']), math.radians(delivery['current_lon'])
+                    lat2, lon2 = math.radians(delivery['dest_lat']), math.radians(delivery['dest_lon'])
+                    dlat = lat2 - lat1
+                    dlon = lon2 - lon1
+                    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                    c = 2 * math.asin(math.sqrt(a))
+                    distance_km = 6371 * c  # Earth radius in km
+                    distance_miles = distance_km * 0.621371
+                    
                     # Current location marker (truck) with custom color
                     folium.Marker(
                         location=[delivery['current_lat'], delivery['current_lon']],
                         popup=f"""<b>{delivery['id']}</b><br>
                                   Status: {delivery['status']}<br>
                                   Current: ({delivery['current_lat']:.2f}, {delivery['current_lon']:.2f})<br>
-                                  Origin: ({delivery['origin_lat']:.2f}, {delivery['origin_lon']:.2f})<br>
-                                  Destination: ({delivery['dest_lat']:.2f}, {delivery['dest_lon']:.2f})""",
-                        tooltip=f"{delivery['id']}: {delivery['status']}",
+                                  Destination: ({delivery['dest_lat']:.2f}, {delivery['dest_lon']:.2f})<br>
+                                  <b>Distance to Destination: {distance_miles:.1f} miles ({distance_km:.1f} km)</b>""",
+                        tooltip=f"{delivery['id']}: {distance_miles:.0f} mi remaining",
                         icon=folium.DivIcon(html=f'<div style="font-size: 24px; color: {hex_color};"><i class="fa fa-truck"></i></div>')
                     ).add_to(m)
                     
