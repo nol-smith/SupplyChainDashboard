@@ -5,32 +5,10 @@ import folium
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QTableWidget, QTableWidgetItem, QPushButton,
                                QLabel, QLineEdit, QComboBox, QGroupBox, QMessageBox,
-                               QTabWidget, QTextEdit, QSpinBox)
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QUrl
-from PySide6.QtGui import QFont, QPixmap
+                               QTabWidget, QTextEdit)
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 from blockchain_helper import BlockchainManager
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
-
-class BlockchainWorker(QThread):
-    """Worker thread for blockchain operations to prevent UI freezing"""
-    finished = Signal(object)
-    error = Signal(str)
-    
-    def __init__(self, operation, *args):
-        super().__init__()
-        self.operation = operation
-        self.args = args
-    
-    def run(self):
-        try:
-            result = self.operation(*self.args)
-            self.finished.emit(result)
-        except Exception as e:
-            self.error.emit(str(e))
 
 class SupplyChainDashboard(QMainWindow):
     def __init__(self):
@@ -535,56 +513,6 @@ class SupplyChainDashboard(QMainWindow):
         layout.addStretch()
         widget.setLayout(layout)
         return widget
-    
-    def refresh_simple_map(self):
-        """Refresh the simple matplotlib map"""
-        if not self.bc:
-            QMessageBox.warning(self, "Connection Error", "Not connected to blockchain")
-            return
-        
-        try:
-            self.map_status.setText("Loading deliveries...")
-            QApplication.processEvents()
-            
-            # Clear figure
-            self.figure.clear()
-            ax = self.figure.add_subplot(111)
-            
-            # Load deliveries and plot
-            colors = {'In Transit': 'blue', 'Delivered': 'green', 'Delayed': 'red', 'Preparing for Shipment': 'orange'}
-            status_data = {status: {'lats': [], 'lons': []} for status in colors.keys()}
-            
-            delivery_count = 0
-            for i in range(1, 101):
-                delivery_id = f'D{i:04d}'
-                try:
-                    delivery = self.bc.get_delivery(delivery_id)
-                    status = delivery['status']
-                    if status in status_data:
-                        status_data[status]['lats'].append(delivery['current_lat'])
-                        status_data[status]['lons'].append(delivery['current_lon'])
-                    delivery_count += 1
-                except:
-                    pass
-            
-            # Plot each status
-            for status, data in status_data.items():
-                if data['lats']:
-                    ax.scatter(data['lons'], data['lats'], c=colors[status], 
-                             label=f"{status} ({len(data['lats'])})", s=50, alpha=0.6)
-            
-            ax.set_xlabel('Longitude')
-            ax.set_ylabel('Latitude')
-            ax.set_title(f'Supply Chain Delivery Locations ({delivery_count} deliveries)')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-            
-            self.canvas.draw()
-            self.map_status.setText(f"Map: {delivery_count} deliveries displayed")
-            
-        except Exception as e:
-            self.map_status.setText(f"Error: {str(e)}")
-            QMessageBox.warning(self, "Map Error", f"Failed to generate map:\n{str(e)}")
     
     def generate_and_open_map(self):
         """Refresh the map with current delivery locations"""
