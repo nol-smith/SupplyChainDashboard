@@ -128,14 +128,26 @@ class SupplyChainDashboard(QMainWindow):
         search_layout.addStretch()
         right_layout.addLayout(search_layout)
         
+        # Column management
+        column_layout = QHBoxLayout()
+        
+        hide_col_btn = QPushButton("Hide/Show Columns")
+        hide_col_btn.clicked.connect(self.toggle_columns)
+        hide_col_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 5px;")
+        column_layout.addWidget(hide_col_btn)
+        
+        column_layout.addStretch()
+        right_layout.addLayout(column_layout)
+        
         # Table
         self.delivery_table = QTableWidget()
-        self.delivery_table.setColumnCount(11)
+        self.delivery_table.setColumnCount(12)
         self.delivery_table.setHorizontalHeaderLabels([
-            "ID", "Status", "Origin Lat", "Origin Lon", 
+            "ID", "Status", "On-Time Status", "Origin Lat", "Origin Lon", 
             "Dest Lat", "Dest Lon", "Current Lat", "Current Lon", 
             "Timestamp", "Expected Date", "Actual Date"
         ])
+        self.delivery_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.delivery_table.horizontalHeader().setStretchLastSection(True)
         right_layout.addWidget(self.delivery_table)
         
@@ -321,6 +333,8 @@ class SupplyChainDashboard(QMainWindow):
             self.blockchain_status.setStyleSheet("color: green;")
             self.contract_label.setText(f"Contract: {self.bc.contract.address[:10]}...")
             self.statusBar().showMessage("Connected to blockchain")
+            # Auto-load deliveries and charts
+            self.load_deliveries()
         except Exception as e:
             self.blockchain_status.setText("🔴 Blockchain: Disconnected")
             self.blockchain_status.setStyleSheet("color: red;")
@@ -389,21 +403,46 @@ class SupplyChainDashboard(QMainWindow):
             status_item.setBackground(color_map[delivery['status']])
         self.delivery_table.setItem(row, 1, status_item)
         
-        self.delivery_table.setItem(row, 2, QTableWidgetItem(f"{delivery['origin_lat']:.4f}"))
-        self.delivery_table.setItem(row, 3, QTableWidgetItem(f"{delivery['origin_lon']:.4f}"))
-        self.delivery_table.setItem(row, 4, QTableWidgetItem(f"{delivery['dest_lat']:.4f}"))
-        self.delivery_table.setItem(row, 5, QTableWidgetItem(f"{delivery['dest_lon']:.4f}"))
-        self.delivery_table.setItem(row, 6, QTableWidgetItem(f"{delivery['current_lat']:.4f}"))
-        self.delivery_table.setItem(row, 7, QTableWidgetItem(f"{delivery['current_lon']:.4f}"))
-        self.delivery_table.setItem(row, 8, QTableWidgetItem(str(delivery['timestamp'])))
+        # On-Time Status
+        import time as time_module
+        current_time = int(time_module.time())
+        expected = delivery['expected_delivery_date']
+        actual = delivery['actual_delivery_date']
+        
+        if delivery['status'] == 'Delivered':
+            if actual > 0 and actual <= expected:
+                on_time_status = 'On-Time'
+                on_time_color = QColor(0, 100, 0)
+            else:
+                on_time_status = 'Late'
+                on_time_color = QColor(220, 20, 60)
+        else:
+            if current_time > expected:
+                on_time_status = 'At Risk'
+                on_time_color = QColor(220, 20, 60)
+            else:
+                on_time_status = 'On Track'
+                on_time_color = QColor(0, 0, 139)
+        
+        on_time_item = QTableWidgetItem(on_time_status)
+        on_time_item.setBackground(on_time_color)
+        self.delivery_table.setItem(row, 2, on_time_item)
+        
+        self.delivery_table.setItem(row, 3, QTableWidgetItem(f"{delivery['origin_lat']:.4f}"))
+        self.delivery_table.setItem(row, 4, QTableWidgetItem(f"{delivery['origin_lon']:.4f}"))
+        self.delivery_table.setItem(row, 5, QTableWidgetItem(f"{delivery['dest_lat']:.4f}"))
+        self.delivery_table.setItem(row, 6, QTableWidgetItem(f"{delivery['dest_lon']:.4f}"))
+        self.delivery_table.setItem(row, 7, QTableWidgetItem(f"{delivery['current_lat']:.4f}"))
+        self.delivery_table.setItem(row, 8, QTableWidgetItem(f"{delivery['current_lon']:.4f}"))
+        self.delivery_table.setItem(row, 9, QTableWidgetItem(str(delivery['timestamp'])))
         
         # Expected delivery date
         expected_str = datetime.fromtimestamp(delivery['expected_delivery_date']).strftime('%Y-%m-%d %H:%M') if delivery['expected_delivery_date'] > 0 else 'N/A'
-        self.delivery_table.setItem(row, 9, QTableWidgetItem(expected_str))
+        self.delivery_table.setItem(row, 10, QTableWidgetItem(expected_str))
         
         # Actual delivery date
         actual_str = datetime.fromtimestamp(delivery['actual_delivery_date']).strftime('%Y-%m-%d %H:%M') if delivery['actual_delivery_date'] > 0 else 'N/A'
-        self.delivery_table.setItem(row, 10, QTableWidgetItem(actual_str))
+        self.delivery_table.setItem(row, 11, QTableWidgetItem(actual_str))
     
     def add_delivery(self):
         """Add new delivery to blockchain"""
@@ -742,11 +781,13 @@ class SupplyChainDashboard(QMainWindow):
             
             if sizes:
                 ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90, 
-                      textprops={'fontsize': 7}, pctdistance=0.85, labeldistance=1.05)
+                      textprops={'fontsize': 7, 'color': 'white'}, pctdistance=0.85, labeldistance=1.05)
                 ax.axis('equal')
             else:
-                ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
+                ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes, color='white')
             
+            self.pie_figure.patch.set_facecolor('#1e1e1e')
+            ax.set_facecolor('#1e1e1e')
             self.pie_figure.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
             self.pie_canvas.draw()
         except Exception as e:
@@ -795,21 +836,56 @@ class SupplyChainDashboard(QMainWindow):
             
             if sum(counts) > 0:
                 bars = ax.barh(categories, counts, color=colors)
-                ax.set_xlabel('Count', fontsize=9)
-                ax.tick_params(axis='both', labelsize=8)
-                ax.grid(True, alpha=0.3, axis='x')
+                ax.set_xlabel('Deliveries', fontsize=9, color='white')
+                ax.tick_params(axis='both', labelsize=8, colors='white')
+                ax.grid(True, alpha=0.3, axis='x', color='white')
+                ax.spines['bottom'].set_color('white')
+                ax.spines['top'].set_color('white')
+                ax.spines['left'].set_color('white')
+                ax.spines['right'].set_color('white')
                 
                 for bar, count in zip(bars, counts):
                     if count > 0:
                         ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2, 
-                               f' {count}', va='center', fontsize=9, fontweight='bold')
+                               f' {count}', va='center', fontsize=9, fontweight='bold', color='white')
             else:
-                ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
+                ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes, color='white')
             
+            self.bar_figure.patch.set_facecolor('#1e1e1e')
+            ax.set_facecolor('#1e1e1e')
             self.bar_figure.tight_layout()
             self.bar_canvas.draw()
         except Exception as e:
             print(f"Error updating bar chart: {e}")
+    
+    def toggle_columns(self):
+        """Show dialog to hide/show columns"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QCheckBox, QDialogButtonBox
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Hide/Show Columns")
+        layout = QVBoxLayout()
+        
+        checkboxes = []
+        for i in range(self.delivery_table.columnCount()):
+            header = self.delivery_table.horizontalHeaderItem(i).text()
+            checkbox = QCheckBox(header)
+            checkbox.setChecked(not self.delivery_table.isColumnHidden(i))
+            checkbox.col_index = i
+            checkboxes.append(checkbox)
+            layout.addWidget(checkbox)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        dialog.setLayout(layout)
+        
+        if dialog.exec():
+            for checkbox in checkboxes:
+                self.delivery_table.setColumnHidden(checkbox.col_index, not checkbox.isChecked())
+            self.statusBar().showMessage("Column visibility updated")
     
     def closeEvent(self, event):
         """Handle window close"""
