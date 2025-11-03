@@ -1,11 +1,19 @@
 import sys
+import os
+import webbrowser
+import folium
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QTableWidget, QTableWidgetItem, QPushButton,
                                QLabel, QLineEdit, QComboBox, QGroupBox, QMessageBox,
-                               QTabWidget, QTextEdit)
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont
+                               QTabWidget, QTextEdit, QSpinBox)
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QUrl
+from PySide6.QtGui import QFont, QPixmap
 from blockchain_helper import BlockchainManager
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 class BlockchainWorker(QThread):
     """Worker thread for blockchain operations to prevent UI freezing"""
@@ -49,7 +57,10 @@ class SupplyChainDashboard(QMainWindow):
         tabs.addTab(self.create_view_tab(), "View Deliveries")
         tabs.addTab(self.create_add_tab(), "Add Delivery")
         tabs.addTab(self.create_update_tab(), "Update Delivery")
+        tabs.addTab(self.create_map_tab(), "Live Map")
         main_layout.addWidget(tabs)
+        
+
         
         # Status bar
         self.statusBar().showMessage("Ready")
@@ -72,6 +83,11 @@ class SupplyChainDashboard(QMainWindow):
         self.contract_label = QLabel("Contract: N/A")
         self.contract_label.setFont(QFont("Arial", 9))
         layout.addWidget(self.contract_label)
+        
+        wipe_btn = QPushButton("Wipe Blockchain")
+        wipe_btn.clicked.connect(self.wipe_blockchain)
+        wipe_btn.setStyleSheet("background-color: #f44336; color: white; padding: 5px;")
+        layout.addWidget(wipe_btn)
         
         header.setLayout(layout)
         return header
@@ -282,8 +298,9 @@ class SupplyChainDashboard(QMainWindow):
         except Exception as e:
             self.blockchain_status.setText("🔴 Blockchain: Disconnected")
             self.blockchain_status.setStyleSheet("color: red;")
-            QMessageBox.warning(self, "Connection Error", 
-                              f"Failed to connect to blockchain:\n{str(e)}\n\nMake sure Ganache is running!")
+            if "contract_address.txt" not in str(e):
+                QMessageBox.warning(self, "Connection Error", 
+                                  f"Failed to connect to blockchain:\n{str(e)}\n\nMake sure Ganache is running!")
     
     def search_delivery(self):
         """Search for a specific delivery"""
@@ -435,6 +452,226 @@ class SupplyChainDashboard(QMainWindow):
         self.add_dest_lon.clear()
         self.add_current_lat.clear()
         self.add_current_lon.clear()
+    
+    def wipe_blockchain(self):
+        """Wipe blockchain by restarting Ganache and redeploying contract"""
+        reply = QMessageBox.question(self, "Wipe Blockchain",
+                                    "This will delete ALL blockchain data and restart Ganache.\n\nAre you sure?",
+                                    QMessageBox.Yes | QMessageBox.No)
+        
+        if reply == QMessageBox.Yes:
+            try:
+                import subprocess
+                import time
+                
+                # Kill Ganache
+                subprocess.run(['pkill', '-f', 'ganache'], check=False)
+                time.sleep(2)
+                
+                # Remove database and contract address
+                import shutil
+                if os.path.exists('ganache_db'):
+                    shutil.rmtree('ganache_db')
+                if os.path.exists('contract_address.txt'):
+                    os.remove('contract_address.txt')
+                
+                # Start Ganache
+                subprocess.Popen(['./start_ganache.sh'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(3)
+                
+                # Reconnect (will auto-deploy new contract)
+                self.bc = None
+                self.connect_blockchain()
+                self.delivery_table.setRowCount(0)
+                QMessageBox.information(self, "Success", "Blockchain wiped and new contract deployed!")
+                    
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to wipe blockchain:\n{str(e)}\n\nYou may need to manually restart Ganache.")
+    
+    def create_map_tab(self):
+        """Tab for interactive map visualization"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        # Info
+        info = QLabel("Click 'Generate Interactive Map' to create a map with all deliveries and open it in your browser")
+        info.setWordWrap(True)
+        info.setStyleSheet("padding: 15px; background-color: #e3f2fd; border-radius: 5px; font-size: 12px;")
+        layout.addWidget(info)
+        
+        # Controls
+        controls = QGroupBox("Map Controls")
+        controls_layout = QVBoxLayout()
+        
+        gen_btn = QPushButton("Generate Interactive Map")
+        gen_btn.clicked.connect(self.generate_and_open_map)
+        gen_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 20px; font-size: 18px; font-weight: bold;")
+        controls_layout.addWidget(gen_btn)
+        
+        self.map_status = QLabel("Map: Not generated")
+        self.map_status.setAlignment(Qt.AlignCenter)
+        self.map_status.setStyleSheet("font-size: 14px; padding: 10px;")
+        controls_layout.addWidget(self.map_status)
+        
+        controls.setLayout(controls_layout)
+        layout.addWidget(controls)
+        
+        # Features list
+        features = QGroupBox("Interactive Map Features")
+        features_layout = QVBoxLayout()
+        features_text = QLabel(
+            "• Color-coded delivery markers by status\n"
+            "• Click markers for delivery details\n"
+            "• Lines showing route to destination\n"
+            "• Zoom and pan controls\n"
+            "• Legend with status colors\n"
+            "• Real-time data from blockchain"
+        )
+        features_text.setStyleSheet("font-size: 12px; padding: 10px;")
+        features_layout.addWidget(features_text)
+        features.setLayout(features_layout)
+        layout.addWidget(features)
+        
+        layout.addStretch()
+        widget.setLayout(layout)
+        return widget
+    
+    def refresh_simple_map(self):
+        """Refresh the simple matplotlib map"""
+        if not self.bc:
+            QMessageBox.warning(self, "Connection Error", "Not connected to blockchain")
+            return
+        
+        try:
+            self.map_status.setText("Loading deliveries...")
+            QApplication.processEvents()
+            
+            # Clear figure
+            self.figure.clear()
+            ax = self.figure.add_subplot(111)
+            
+            # Load deliveries and plot
+            colors = {'In Transit': 'blue', 'Delivered': 'green', 'Delayed': 'red', 'Preparing for Shipment': 'orange'}
+            status_data = {status: {'lats': [], 'lons': []} for status in colors.keys()}
+            
+            delivery_count = 0
+            for i in range(1, 101):
+                delivery_id = f'D{i:04d}'
+                try:
+                    delivery = self.bc.get_delivery(delivery_id)
+                    status = delivery['status']
+                    if status in status_data:
+                        status_data[status]['lats'].append(delivery['current_lat'])
+                        status_data[status]['lons'].append(delivery['current_lon'])
+                    delivery_count += 1
+                except:
+                    pass
+            
+            # Plot each status
+            for status, data in status_data.items():
+                if data['lats']:
+                    ax.scatter(data['lons'], data['lats'], c=colors[status], 
+                             label=f"{status} ({len(data['lats'])})", s=50, alpha=0.6)
+            
+            ax.set_xlabel('Longitude')
+            ax.set_ylabel('Latitude')
+            ax.set_title(f'Supply Chain Delivery Locations ({delivery_count} deliveries)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            
+            self.canvas.draw()
+            self.map_status.setText(f"Map: {delivery_count} deliveries displayed")
+            
+        except Exception as e:
+            self.map_status.setText(f"Error: {str(e)}")
+            QMessageBox.warning(self, "Map Error", f"Failed to generate map:\n{str(e)}")
+    
+    def generate_and_open_map(self):
+        """Refresh the map with current delivery locations"""
+        if not self.bc:
+            QMessageBox.warning(self, "Connection Error", "Not connected to blockchain")
+            return
+        
+        try:
+            # Create map centered on US
+            m = folium.Map(location=[39.8283, -98.5795], zoom_start=4)
+            
+            # Load deliveries and add markers
+            delivery_count = 0
+            for i in range(1, 101):  # Try first 100 deliveries
+                delivery_id = f'D{i:04d}'
+                try:
+                    delivery = self.bc.get_delivery(delivery_id)
+                    
+                    # Color based on status
+                    color_map = {
+                        'In Transit': 'blue',
+                        'Delivered': 'green',
+                        'Delayed': 'red',
+                        'Preparing for Shipment': 'orange'
+                    }
+                    color = color_map.get(delivery['status'], 'gray')
+                    
+                    # Add marker for current location
+                    folium.Marker(
+                        location=[delivery['current_lat'], delivery['current_lon']],
+                        popup=f"""<b>{delivery['id']}</b><br>
+                                  Status: {delivery['status']}<br>
+                                  Current: ({delivery['current_lat']:.2f}, {delivery['current_lon']:.2f})<br>
+                                  Destination: ({delivery['dest_lat']:.2f}, {delivery['dest_lon']:.2f})""",
+                        tooltip=f"{delivery['id']}: {delivery['status']}",
+                        icon=folium.Icon(color=color, icon='truck', prefix='fa')
+                    ).add_to(m)
+                    
+                    # Draw line from current to destination
+                    folium.PolyLine(
+                        locations=[
+                            [delivery['current_lat'], delivery['current_lon']],
+                            [delivery['dest_lat'], delivery['dest_lon']]
+                        ],
+                        color=color,
+                        weight=2,
+                        opacity=0.5
+                    ).add_to(m)
+                    
+                    delivery_count += 1
+                except:
+                    pass
+            
+            # Add legend
+            legend_html = '''
+            <div style="position: fixed; 
+                        bottom: 50px; right: 50px; width: 200px; height: 150px; 
+                        background-color: white; border:2px solid grey; z-index:9999; 
+                        font-size:14px; padding: 10px">
+            <p><b>Delivery Status</b></p>
+            <p><i class="fa fa-truck" style="color:blue"></i> In Transit</p>
+            <p><i class="fa fa-truck" style="color:green"></i> Delivered</p>
+            <p><i class="fa fa-truck" style="color:red"></i> Delayed</p>
+            <p><i class="fa fa-truck" style="color:orange"></i> Preparing</p>
+            </div>
+            '''
+            m.get_root().html.add_child(folium.Element(legend_html))
+            
+            # Save to file and open in browser
+            map_file = 'supply_chain_map.html'
+            m.save(map_file)
+            
+            # Open in default browser
+            webbrowser.open('file://' + os.path.abspath(map_file))
+            
+            self.map_status.setText(f"✓ Map generated with {delivery_count} deliveries")
+            
+            QMessageBox.information(self, "Map Generated", 
+                                  f"Map with {delivery_count} deliveries opened in your browser!")
+            
+        except Exception as e:
+            self.map_status.setText(f"Error: {str(e)}")
+            QMessageBox.warning(self, "Map Error", f"Failed to generate map:\n{str(e)}")
+    
+    def closeEvent(self, event):
+        """Handle window close"""
+        event.accept()
 
 def main():
     app = QApplication(sys.argv)
