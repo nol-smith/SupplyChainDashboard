@@ -1,5 +1,6 @@
 from brownie import SimpleDeliveryTracker, accounts, network
 import time
+import os
 
 class BlockchainManager:
     def __init__(self):
@@ -7,11 +8,17 @@ class BlockchainManager:
         if not network.is_connected():
             network.connect('development')
         
-        # Load contract address
-        with open('contract_address.txt', 'r') as f:
-            contract_address = f.read().strip()
+        # Load or deploy contract
+        if os.path.exists('contract_address.txt'):
+            with open('contract_address.txt', 'r') as f:
+                contract_address = f.read().strip()
+            self.contract = SimpleDeliveryTracker.at(contract_address)
+        else:
+            # Deploy new contract if address file doesn't exist
+            self.contract = SimpleDeliveryTracker.deploy({'from': accounts[0]})
+            with open('contract_address.txt', 'w') as f:
+                f.write(self.contract.address)
         
-        self.contract = SimpleDeliveryTracker.at(contract_address)
         self.account = accounts[0]
     
     def add_delivery(self, delivery_id, origin_lat, origin_lon, dest_lat, dest_lon, status, current_lat, current_lon):
