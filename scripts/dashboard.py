@@ -293,11 +293,14 @@ class SupplyChainDashboard(QMainWindow):
         
         try:
             delivery = self.bc.get_delivery(delivery_id)
+            if not delivery['id'] or delivery['id'] == '':
+                QMessageBox.warning(self, "Not Found", f"Delivery '{delivery_id}' does not exist on the blockchain.")
+                return
             self.delivery_table.setRowCount(1)
             self.populate_table_row(0, delivery)
             self.statusBar().showMessage(f"Found delivery: {delivery_id}")
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Delivery not found:\n{str(e)}")
+            QMessageBox.warning(self, "Not Found", f"Delivery '{delivery_id}' does not exist on the blockchain.")
     
     def load_deliveries(self):
         """Load first 10 deliveries"""
@@ -320,8 +323,22 @@ class SupplyChainDashboard(QMainWindow):
     
     def populate_table_row(self, row, delivery):
         """Populate a table row with delivery data"""
+        from PySide6.QtGui import QColor
+        
         self.delivery_table.setItem(row, 0, QTableWidgetItem(delivery['id']))
-        self.delivery_table.setItem(row, 1, QTableWidgetItem(delivery['status']))
+        
+        # Color-coded status
+        status_item = QTableWidgetItem(delivery['status'])
+        color_map = {
+            'In Transit': QColor(173, 216, 230),
+            'Delivered': QColor(144, 238, 144),
+            'Delayed': QColor(255, 182, 193),
+            'Preparing for Shipment': QColor(255, 218, 185)
+        }
+        if delivery['status'] in color_map:
+            status_item.setBackground(color_map[delivery['status']])
+        self.delivery_table.setItem(row, 1, status_item)
+        
         self.delivery_table.setItem(row, 2, QTableWidgetItem(f"{delivery['origin_lat']:.4f}"))
         self.delivery_table.setItem(row, 3, QTableWidgetItem(f"{delivery['origin_lon']:.4f}"))
         self.delivery_table.setItem(row, 4, QTableWidgetItem(f"{delivery['dest_lat']:.4f}"))
