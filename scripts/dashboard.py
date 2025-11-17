@@ -8,7 +8,15 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QTabWidget, QTextEdit)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
+
+# Add parent directory to path to import blockchain_helper
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from blockchain_helper import BlockchainManager
+import matplotlib
+matplotlib.use('Qt5Agg')
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 class SupplyChainDashboard(QMainWindow):
     def __init__(self):
@@ -62,6 +70,11 @@ class SupplyChainDashboard(QMainWindow):
         self.contract_label.setFont(QFont("Arial", 9))
         layout.addWidget(self.contract_label)
         
+        self.delivery_count_badge = QLabel("📦 Deliveries: 0")
+        self.delivery_count_badge.setFont(QFont("Arial", 10, QFont.Bold))
+        self.delivery_count_badge.setStyleSheet("background-color: #2196F3; color: white; padding: 5px 10px; border-radius: 5px;")
+        layout.addWidget(self.delivery_count_badge)
+        
         wipe_btn = QPushButton("Wipe Blockchain")
         wipe_btn.clicked.connect(self.wipe_blockchain)
         wipe_btn.setStyleSheet("background-color: #f44336; color: white; padding: 5px;")
@@ -73,7 +86,48 @@ class SupplyChainDashboard(QMainWindow):
     def create_view_tab(self):
         """Tab for viewing deliveries"""
         widget = QWidget()
-        layout = QVBoxLayout()
+        layout = QHBoxLayout()
+        
+        # Left side - charts
+        left_layout = QVBoxLayout()
+        chart_label = QLabel("Delivery Status Distribution")
+        chart_label.setAlignment(Qt.AlignCenter)
+        chart_label.setFont(QFont("Arial", 16, QFont.Bold))
+        left_layout.addWidget(chart_label)
+        
+        self.pie_figure = Figure(figsize=(4, 3))
+        self.pie_canvas = FigureCanvas(self.pie_figure)
+        left_layout.addWidget(self.pie_canvas)
+        
+        # Performance chart
+        bar_label = QLabel("On-Time Performance")
+        bar_label.setAlignment(Qt.AlignCenter)
+        bar_label.setFont(QFont("Arial", 16, QFont.Bold))
+        left_layout.addWidget(bar_label)
+        
+        self.bar_figure = Figure(figsize=(4, 3))
+        self.bar_canvas = FigureCanvas(self.bar_figure)
+        left_layout.addWidget(self.bar_canvas)
+        
+        refresh_chart_btn = QPushButton("Refresh Charts")
+        refresh_chart_btn.clicked.connect(self.update_charts)
+        left_layout.addWidget(refresh_chart_btn)
+        
+        # Average delivery time widget
+        avg_time_group = QGroupBox("Average Delivery Time")
+        avg_time_layout = QVBoxLayout()
+        self.avg_time_label = QLabel("--")
+        self.avg_time_label.setAlignment(Qt.AlignCenter)
+        self.avg_time_label.setFont(QFont("Arial", 24, QFont.Bold))
+        self.avg_time_label.setStyleSheet("color: #4CAF50; padding: 10px;")
+        avg_time_layout.addWidget(self.avg_time_label)
+        avg_time_group.setLayout(avg_time_layout)
+        left_layout.addWidget(avg_time_group)
+        
+        layout.addLayout(left_layout, 30)
+        
+        # Right side - table
+        right_layout = QVBoxLayout()
         
         # Search section
         search_layout = QHBoxLayout()
@@ -91,17 +145,42 @@ class SupplyChainDashboard(QMainWindow):
         search_layout.addWidget(load_all_btn)
         
         search_layout.addStretch()
-        layout.addLayout(search_layout)
+        right_layout.addLayout(search_layout)
+        
+        # Column management
+        column_layout = QHBoxLayout()
+        
+        hide_col_btn = QPushButton("Hide/Show Columns")
+        hide_col_btn.clicked.connect(self.toggle_columns)
+        hide_col_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 5px;")
+        column_layout.addWidget(hide_col_btn)
+        
+        column_layout.addStretch()
+        right_layout.addLayout(column_layout)
         
         # Table
         self.delivery_table = QTableWidget()
-        self.delivery_table.setColumnCount(9)
+        self.delivery_table.setColumnCount(14)
         self.delivery_table.setHorizontalHeaderLabels([
-            "ID", "Status", "Origin Lat", "Origin Lon", 
-            "Dest Lat", "Dest Lon", "Current Lat", "Current Lon", "Timestamp"
+            "ID", "Status", "On-Time Status", "Origin Lat", "Origin Lon", 
+            "Dest Lat", "Dest Lon", "Current Lat", "Current Lon", 
+            "Timestamp", "Expected Date", "Actual Date", "Edit", "History"
         ])
+        self.delivery_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.delivery_table.setSortingEnabled(True)
         self.delivery_table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.delivery_table)
+        
+        # Hide coordinate columns by default
+        self.delivery_table.setColumnHidden(3, True)  # Origin Lat
+        self.delivery_table.setColumnHidden(4, True)  # Origin Lon
+        self.delivery_table.setColumnHidden(5, True)  # Dest Lat
+        self.delivery_table.setColumnHidden(6, True)  # Dest Lon
+        self.delivery_table.setColumnHidden(7, True)  # Current Lat
+        self.delivery_table.setColumnHidden(8, True)  # Current Lon
+        
+        right_layout.addWidget(self.delivery_table)
+        
+        layout.addLayout(right_layout, 70)
         
         widget.setLayout(layout)
         return widget
@@ -166,6 +245,16 @@ class SupplyChainDashboard(QMainWindow):
         status_layout.addWidget(self.add_status)
         status_layout.addStretch()
         form_layout.addLayout(status_layout)
+        
+        # Expected delivery days
+        days_layout = QHBoxLayout()
+        days_layout.addWidget(QLabel("Expected Delivery (days from now):"))
+        self.add_expected_days = QLineEdit()
+        self.add_expected_days.setPlaceholderText("3")
+        self.add_expected_days.setMaximumWidth(100)
+        days_layout.addWidget(self.add_expected_days)
+        days_layout.addStretch()
+        form_layout.addLayout(days_layout)
         
         # Add button
         add_btn = QPushButton("Add to Blockchain")
@@ -273,6 +362,8 @@ class SupplyChainDashboard(QMainWindow):
             self.blockchain_status.setStyleSheet("color: green;")
             self.contract_label.setText(f"Contract: {self.bc.contract.address[:10]}...")
             self.statusBar().showMessage("Connected to blockchain")
+            # Auto-load deliveries and charts
+            self.load_deliveries()
         except Exception as e:
             self.blockchain_status.setText("🔴 Blockchain: Disconnected")
             self.blockchain_status.setStyleSheet("color: red;")
@@ -293,11 +384,14 @@ class SupplyChainDashboard(QMainWindow):
         
         try:
             delivery = self.bc.get_delivery(delivery_id)
+            if not delivery['id'] or delivery['id'] == '':
+                QMessageBox.warning(self, "Not Found", f"Delivery '{delivery_id}' does not exist on the blockchain.")
+                return
             self.delivery_table.setRowCount(1)
             self.populate_table_row(0, delivery)
             self.statusBar().showMessage(f"Found delivery: {delivery_id}")
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Delivery not found:\n{str(e)}")
+            QMessageBox.warning(self, "Not Found", f"Delivery '{delivery_id}' does not exist on the blockchain.")
     
     def load_deliveries(self):
         """Load first 10 deliveries"""
@@ -317,18 +411,80 @@ class SupplyChainDashboard(QMainWindow):
                 pass
         
         self.statusBar().showMessage("Loaded first 10 deliveries from blockchain")
+        self.update_delivery_count()
+        self.update_charts()
     
     def populate_table_row(self, row, delivery):
         """Populate a table row with delivery data"""
+        from PySide6.QtGui import QColor
+        from datetime import datetime
+        
         self.delivery_table.setItem(row, 0, QTableWidgetItem(delivery['id']))
-        self.delivery_table.setItem(row, 1, QTableWidgetItem(delivery['status']))
-        self.delivery_table.setItem(row, 2, QTableWidgetItem(f"{delivery['origin_lat']:.4f}"))
-        self.delivery_table.setItem(row, 3, QTableWidgetItem(f"{delivery['origin_lon']:.4f}"))
-        self.delivery_table.setItem(row, 4, QTableWidgetItem(f"{delivery['dest_lat']:.4f}"))
-        self.delivery_table.setItem(row, 5, QTableWidgetItem(f"{delivery['dest_lon']:.4f}"))
-        self.delivery_table.setItem(row, 6, QTableWidgetItem(f"{delivery['current_lat']:.4f}"))
-        self.delivery_table.setItem(row, 7, QTableWidgetItem(f"{delivery['current_lon']:.4f}"))
-        self.delivery_table.setItem(row, 8, QTableWidgetItem(str(delivery['timestamp'])))
+        
+        # Color-coded status
+        status_item = QTableWidgetItem(delivery['status'])
+        color_map = {
+            'In Transit': QColor(0, 0, 139),
+            'Delivered': QColor(0, 100, 0),
+            'Delayed': QColor(220, 20, 60),
+            'Preparing for Shipment': QColor(255, 140, 0)
+        }
+        if delivery['status'] in color_map:
+            status_item.setBackground(color_map[delivery['status']])
+        self.delivery_table.setItem(row, 1, status_item)
+        
+        # On-Time Status
+        import time as time_module
+        current_time = int(time_module.time())
+        expected = delivery['expected_delivery_date']
+        actual = delivery['actual_delivery_date']
+        
+        if delivery['status'] == 'Delivered':
+            if actual > 0 and actual <= expected:
+                on_time_status = 'On-Time'
+                on_time_color = QColor(0, 100, 0)
+            else:
+                on_time_status = 'Late'
+                on_time_color = QColor(220, 20, 60)
+        else:
+            if current_time > expected:
+                on_time_status = 'At Risk'
+                on_time_color = QColor(220, 20, 60)
+            else:
+                on_time_status = 'On Track'
+                on_time_color = QColor(0, 0, 139)
+        
+        on_time_item = QTableWidgetItem(on_time_status)
+        on_time_item.setBackground(on_time_color)
+        self.delivery_table.setItem(row, 2, on_time_item)
+        
+        self.delivery_table.setItem(row, 3, QTableWidgetItem(f"{delivery['origin_lat']:.4f}"))
+        self.delivery_table.setItem(row, 4, QTableWidgetItem(f"{delivery['origin_lon']:.4f}"))
+        self.delivery_table.setItem(row, 5, QTableWidgetItem(f"{delivery['dest_lat']:.4f}"))
+        self.delivery_table.setItem(row, 6, QTableWidgetItem(f"{delivery['dest_lon']:.4f}"))
+        self.delivery_table.setItem(row, 7, QTableWidgetItem(f"{delivery['current_lat']:.4f}"))
+        self.delivery_table.setItem(row, 8, QTableWidgetItem(f"{delivery['current_lon']:.4f}"))
+        self.delivery_table.setItem(row, 9, QTableWidgetItem(str(delivery['timestamp'])))
+        
+        # Expected delivery date
+        expected_str = datetime.fromtimestamp(delivery['expected_delivery_date']).strftime('%Y-%m-%d %H:%M') if delivery['expected_delivery_date'] > 0 else 'N/A'
+        self.delivery_table.setItem(row, 10, QTableWidgetItem(expected_str))
+        
+        # Actual delivery date
+        actual_str = datetime.fromtimestamp(delivery['actual_delivery_date']).strftime('%Y-%m-%d %H:%M') if delivery['actual_delivery_date'] > 0 else 'N/A'
+        self.delivery_table.setItem(row, 11, QTableWidgetItem(actual_str))
+        
+        # Edit button
+        edit_btn = QPushButton("Edit")
+        edit_btn.setStyleSheet("background-color: #FF9800; color: white; padding: 5px;")
+        edit_btn.clicked.connect(lambda checked, d_id=delivery['id']: self.show_edit_dialog(d_id))
+        self.delivery_table.setCellWidget(row, 12, edit_btn)
+        
+        # View History button
+        history_btn = QPushButton("View History")
+        history_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 5px;")
+        history_btn.clicked.connect(lambda checked, d_id=delivery['id']: self.view_delivery_history(d_id))
+        self.delivery_table.setCellWidget(row, 13, history_btn)
     
     def add_delivery(self):
         """Add new delivery to blockchain"""
@@ -337,6 +493,8 @@ class SupplyChainDashboard(QMainWindow):
             return
         
         try:
+            import time as time_module
+            
             delivery_id = self.add_id.text().strip()
             origin_lat = float(self.add_origin_lat.text())
             origin_lon = float(self.add_origin_lon.text())
@@ -346,19 +504,26 @@ class SupplyChainDashboard(QMainWindow):
             current_lon = float(self.add_current_lon.text())
             status = self.add_status.currentText()
             
+            # Expected delivery date
+            days_text = self.add_expected_days.text().strip()
+            days = int(days_text) if days_text else 3
+            expected_date = int(time_module.time()) + (days * 24 * 60 * 60)
+            
             if not delivery_id:
                 raise ValueError("Delivery ID is required")
             
             self.add_log.append(f"Adding {delivery_id} to blockchain...")
             tx = self.bc.add_delivery(delivery_id, origin_lat, origin_lon, dest_lat, 
-                                     dest_lon, status, current_lat, current_lon)
+                                     dest_lon, status, current_lat, current_lon, expected_date)
             
             self.add_log.append(f"✓ Success! Transaction: {tx.txid}")
             self.add_log.append(f"  Status: {status}")
+            self.add_log.append(f"  Expected in {days} days")
             self.add_log.append("-" * 50)
             
             QMessageBox.information(self, "Success", f"Delivery {delivery_id} added to blockchain!")
             self.clear_add_form()
+            self.load_deliveries()
             
         except ValueError as e:
             QMessageBox.warning(self, "Input Error", f"Invalid input:\n{str(e)}")
@@ -373,20 +538,32 @@ class SupplyChainDashboard(QMainWindow):
             return
         
         try:
+            from PySide6.QtWidgets import QInputDialog
+            
             delivery_id = self.update_status_id.text().strip()
             new_status = self.update_status_combo.currentText()
             
             if not delivery_id:
                 raise ValueError("Delivery ID is required")
             
+            reason = ""
+            if new_status == "Delayed":
+                reason, ok = QInputDialog.getText(self, "Delay Reason", "Please enter reason for delay:")
+                if not ok or not reason:
+                    QMessageBox.warning(self, "Required", "Delay reason is required")
+                    return
+            
             self.update_log.append(f"Updating status for {delivery_id}...")
-            tx = self.bc.update_status(delivery_id, new_status)
+            tx = self.bc.update_status(delivery_id, new_status, reason)
             
             self.update_log.append(f"✓ Status updated to: {new_status}")
+            if reason:
+                self.update_log.append(f"  Reason: {reason}")
             self.update_log.append(f"  Transaction: {tx.txid}")
             self.update_log.append("-" * 50)
             
             QMessageBox.information(self, "Success", f"Status updated to: {new_status}")
+            self.load_deliveries()
             
         except Exception as e:
             self.update_log.append(f"✗ Error: {str(e)}")
@@ -414,6 +591,7 @@ class SupplyChainDashboard(QMainWindow):
             self.update_log.append("-" * 50)
             
             QMessageBox.information(self, "Success", f"Location updated!")
+            self.load_deliveries()
             
         except ValueError as e:
             QMessageBox.warning(self, "Input Error", f"Invalid input:\n{str(e)}")
@@ -430,6 +608,7 @@ class SupplyChainDashboard(QMainWindow):
         self.add_dest_lon.clear()
         self.add_current_lat.clear()
         self.add_current_lon.clear()
+        self.add_expected_days.clear()
     
     def wipe_blockchain(self):
         """Wipe blockchain by restarting Ganache and redeploying contract"""
@@ -471,19 +650,38 @@ class SupplyChainDashboard(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout()
         
-        # Info
-        info = QLabel("Click 'Generate Interactive Map' to create a map with all deliveries and open it in your browser")
-        info.setWordWrap(True)
-        info.setStyleSheet("padding: 15px; background-color: #e3f2fd; border-radius: 5px; font-size: 12px;")
-        layout.addWidget(info)
-        
         # Controls
         controls = QGroupBox("Map Controls")
         controls_layout = QVBoxLayout()
         
+        # Status filters
+        filter_label = QLabel("Filter by Status:")
+        filter_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        controls_layout.addWidget(filter_label)
+        
+        filter_layout = QHBoxLayout()
+        from PySide6.QtWidgets import QCheckBox
+        self.filter_in_transit = QCheckBox("In Transit")
+        self.filter_in_transit.setChecked(True)
+        filter_layout.addWidget(self.filter_in_transit)
+        
+        self.filter_delivered = QCheckBox("Delivered")
+        self.filter_delivered.setChecked(True)
+        filter_layout.addWidget(self.filter_delivered)
+        
+        self.filter_delayed = QCheckBox("Delayed")
+        self.filter_delayed.setChecked(True)
+        filter_layout.addWidget(self.filter_delayed)
+        
+        self.filter_preparing = QCheckBox("Preparing")
+        self.filter_preparing.setChecked(True)
+        filter_layout.addWidget(self.filter_preparing)
+        
+        controls_layout.addLayout(filter_layout)
+        
         gen_btn = QPushButton("Generate Interactive Map")
         gen_btn.clicked.connect(self.generate_and_open_map)
-        gen_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 20px; font-size: 18px; font-weight: bold;")
+        gen_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 20px; font-size: 18px; font-weight: bold; margin-top: 10px;")
         controls_layout.addWidget(gen_btn)
         
         self.map_status = QLabel("Map: Not generated")
@@ -493,22 +691,6 @@ class SupplyChainDashboard(QMainWindow):
         
         controls.setLayout(controls_layout)
         layout.addWidget(controls)
-        
-        # Features list
-        features = QGroupBox("Interactive Map Features")
-        features_layout = QVBoxLayout()
-        features_text = QLabel(
-            "• Color-coded delivery markers by status\n"
-            "• Click markers for delivery details\n"
-            "• Lines showing route to destination\n"
-            "• Zoom and pan controls\n"
-            "• Legend with status colors\n"
-            "• Real-time data from blockchain"
-        )
-        features_text.setStyleSheet("font-size: 12px; padding: 10px;")
-        features_layout.addWidget(features_text)
-        features.setLayout(features_layout)
-        layout.addWidget(features)
         
         layout.addStretch()
         widget.setLayout(layout)
@@ -524,6 +706,17 @@ class SupplyChainDashboard(QMainWindow):
             # Create map centered on US
             m = folium.Map(location=[39.8283, -98.5795], zoom_start=4)
             
+            # Get selected filters
+            show_statuses = []
+            if self.filter_in_transit.isChecked():
+                show_statuses.append('In Transit')
+            if self.filter_delivered.isChecked():
+                show_statuses.append('Delivered')
+            if self.filter_delayed.isChecked():
+                show_statuses.append('Delayed')
+            if self.filter_preparing.isChecked():
+                show_statuses.append('Preparing for Shipment')
+            
             # Load deliveries and add markers
             delivery_count = 0
             for i in range(1, 101):  # Try first 100 deliveries
@@ -531,35 +724,71 @@ class SupplyChainDashboard(QMainWindow):
                 try:
                     delivery = self.bc.get_delivery(delivery_id)
                     
+                    # Filter by selected statuses
+                    if delivery['status'] not in show_statuses:
+                        continue
+                    
                     # Color based on status
                     color_map = {
-                        'In Transit': 'blue',
-                        'Delivered': 'green',
-                        'Delayed': 'red',
-                        'Preparing for Shipment': 'orange'
+                        'In Transit': '#00008B',
+                        'Delivered': '#006400',
+                        'Delayed': '#DC143C',
+                        'Preparing for Shipment': '#FF8C00'
                     }
-                    color = color_map.get(delivery['status'], 'gray')
+                    hex_color = color_map.get(delivery['status'], 'gray')
                     
-                    # Add marker for current location
+                    # Origin marker (small circle)
+                    folium.CircleMarker(
+                        location=[delivery['origin_lat'], delivery['origin_lon']],
+                        radius=5,
+                        popup=f"<b>Origin</b><br>{delivery['id']}",
+                        color='gray',
+                        fill=True,
+                        fillColor='white',
+                        fillOpacity=0.8
+                    ).add_to(m)
+                    
+                    # Destination marker (star)
+                    folium.Marker(
+                        location=[delivery['dest_lat'], delivery['dest_lon']],
+                        popup=f"<b>Destination</b><br>{delivery['id']}",
+                        icon=folium.Icon(color='black', icon='star', prefix='fa')
+                    ).add_to(m)
+                    
+                    # Calculate distance to destination (Haversine formula)
+                    import math
+                    lat1, lon1 = math.radians(delivery['current_lat']), math.radians(delivery['current_lon'])
+                    lat2, lon2 = math.radians(delivery['dest_lat']), math.radians(delivery['dest_lon'])
+                    dlat = lat2 - lat1
+                    dlon = lon2 - lon1
+                    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                    c = 2 * math.asin(math.sqrt(a))
+                    distance_km = 6371 * c  # Earth radius in km
+                    distance_miles = distance_km * 0.621371
+                    
+                    # Current location marker (truck) with custom color
                     folium.Marker(
                         location=[delivery['current_lat'], delivery['current_lon']],
                         popup=f"""<b>{delivery['id']}</b><br>
                                   Status: {delivery['status']}<br>
                                   Current: ({delivery['current_lat']:.2f}, {delivery['current_lon']:.2f})<br>
-                                  Destination: ({delivery['dest_lat']:.2f}, {delivery['dest_lon']:.2f})""",
-                        tooltip=f"{delivery['id']}: {delivery['status']}",
-                        icon=folium.Icon(color=color, icon='truck', prefix='fa')
+                                  Destination: ({delivery['dest_lat']:.2f}, {delivery['dest_lon']:.2f})<br>
+                                  <b>Distance to Destination: {distance_miles:.1f} miles ({distance_km:.1f} km)</b>""",
+                        tooltip=f"{delivery['id']}: {distance_miles:.0f} mi remaining",
+                        icon=folium.DivIcon(html=f'<div style="font-size: 24px; color: {hex_color};"><i class="fa fa-truck"></i></div>')
                     ).add_to(m)
                     
-                    # Draw line from current to destination
+                    # Draw route: origin -> current -> destination
                     folium.PolyLine(
                         locations=[
+                            [delivery['origin_lat'], delivery['origin_lon']],
                             [delivery['current_lat'], delivery['current_lon']],
                             [delivery['dest_lat'], delivery['dest_lon']]
                         ],
-                        color=color,
+                        color=hex_color,
                         weight=2,
-                        opacity=0.5
+                        opacity=0.6,
+                        dash_array='5, 10'
                     ).add_to(m)
                     
                     delivery_count += 1
@@ -569,14 +798,16 @@ class SupplyChainDashboard(QMainWindow):
             # Add legend
             legend_html = '''
             <div style="position: fixed; 
-                        bottom: 50px; right: 50px; width: 200px; height: 150px; 
+                        bottom: 50px; right: 50px; width: 220px; height: 200px; 
                         background-color: white; border:2px solid grey; z-index:9999; 
-                        font-size:14px; padding: 10px">
-            <p><b>Delivery Status</b></p>
-            <p><i class="fa fa-truck" style="color:blue"></i> In Transit</p>
-            <p><i class="fa fa-truck" style="color:green"></i> Delivered</p>
-            <p><i class="fa fa-truck" style="color:red"></i> Delayed</p>
-            <p><i class="fa fa-truck" style="color:orange"></i> Preparing</p>
+                        font-size:13px; padding: 10px">
+            <p><b>Map Legend</b></p>
+            <p><i class="fa fa-circle" style="color:gray"></i> Origin</p>
+            <p><i class="fa fa-star" style="color:black"></i> Destination</p>
+            <p><i class="fa fa-truck" style="color:#00008B"></i> In Transit</p>
+            <p><i class="fa fa-truck" style="color:#006400"></i> Delivered</p>
+            <p><i class="fa fa-truck" style="color:#DC143C"></i> Delayed</p>
+            <p><i class="fa fa-truck" style="color:#FF8C00"></i> Preparing</p>
             </div>
             '''
             m.get_root().html.add_child(folium.Element(legend_html))
@@ -596,6 +827,350 @@ class SupplyChainDashboard(QMainWindow):
         except Exception as e:
             self.map_status.setText(f"Error: {str(e)}")
             QMessageBox.warning(self, "Map Error", f"Failed to generate map:\n{str(e)}")
+    
+    def update_delivery_count(self):
+        """Update delivery count badge"""
+        if not self.bc:
+            return
+        
+        count = 0
+        for i in range(1, 101):
+            try:
+                delivery = self.bc.get_delivery(f'D{i:04d}')
+                if delivery['id']:
+                    count += 1
+            except:
+                pass
+        
+        self.delivery_count_badge.setText(f"📦 Deliveries: {count}")
+    
+    def update_charts(self):
+        """Update both pie chart and bar chart"""
+        self.update_pie_chart()
+        self.update_bar_chart()
+        self.update_avg_delivery_time()
+    
+    def update_avg_delivery_time(self):
+        """Calculate and display average delivery time"""
+        if not self.bc:
+            return
+        
+        try:
+            import time as time_module
+            total_time = 0
+            count = 0
+            
+            for i in range(1, 101):
+                delivery_id = f'D{i:04d}'
+                try:
+                    delivery = self.bc.get_delivery(delivery_id)
+                    if delivery['status'] == 'Delivered' and delivery['actual_delivery_date'] > 0:
+                        delivery_time = delivery['actual_delivery_date'] - delivery['timestamp']
+                        total_time += delivery_time
+                        count += 1
+                except:
+                    pass
+            
+            if count > 0:
+                avg_seconds = total_time / count
+                avg_hours = avg_seconds / 3600
+                avg_days = avg_hours / 24
+                
+                if avg_days >= 1:
+                    self.avg_time_label.setText(f"{avg_days:.1f} days")
+                else:
+                    self.avg_time_label.setText(f"{avg_hours:.1f} hours")
+            else:
+                self.avg_time_label.setText("No data")
+        except Exception as e:
+            print(f"Error calculating avg delivery time: {e}")
+    
+    def update_pie_chart(self):
+        """Update pie chart with delivery status distribution"""
+        if not self.bc:
+            return
+        
+        try:
+            status_counts = {'In Transit': 0, 'Delivered': 0, 'Delayed': 0, 'Preparing for Shipment': 0}
+            
+            for i in range(1, 101):
+                delivery_id = f'D{i:04d}'
+                try:
+                    delivery = self.bc.get_delivery(delivery_id)
+                    if delivery['id'] and delivery['status'] in status_counts:
+                        status_counts[delivery['status']] += 1
+                except:
+                    pass
+            
+            self.pie_figure.clear()
+            ax = self.pie_figure.add_subplot(111)
+            
+            labels = []
+            sizes = []
+            colors = []
+            color_map = {'In Transit': '#00008B', 'Delivered': '#006400', 'Delayed': '#DC143C', 'Preparing for Shipment': '#FF8C00'}
+            
+            for status, count in status_counts.items():
+                if count > 0:
+                    labels.append(f"{status}\n({count})")
+                    sizes.append(count)
+                    colors.append(color_map[status])
+            
+            if sizes:
+                ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90, 
+                      textprops={'fontsize': 7, 'color': 'white'}, pctdistance=0.85, labeldistance=1.05)
+                ax.axis('equal')
+            else:
+                ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes, color='white')
+            
+            self.pie_figure.patch.set_facecolor('#1e1e1e')
+            ax.set_facecolor('#1e1e1e')
+            self.pie_figure.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+            self.pie_canvas.draw()
+        except Exception as e:
+            print(f"Error updating pie chart: {e}")
+    
+    def update_bar_chart(self):
+        """Update bar chart with on-time performance"""
+        if not self.bc:
+            return
+        
+        try:
+            import time as time_module
+            current_time = int(time_module.time())
+            
+            performance = {'On-Time': 0, 'Late': 0, 'At Risk': 0, 'On Track': 0}
+            
+            for i in range(1, 101):
+                delivery_id = f'D{i:04d}'
+                try:
+                    delivery = self.bc.get_delivery(delivery_id)
+                    if not delivery['id']:
+                        continue
+                    
+                    expected = delivery['expected_delivery_date']
+                    actual = delivery['actual_delivery_date']
+                    
+                    if delivery['status'] == 'Delivered':
+                        if actual > 0 and actual <= expected:
+                            performance['On-Time'] += 1
+                        else:
+                            performance['Late'] += 1
+                    else:
+                        if current_time > expected:
+                            performance['At Risk'] += 1
+                        else:
+                            performance['On Track'] += 1
+                except:
+                    pass
+            
+            self.bar_figure.clear()
+            ax = self.bar_figure.add_subplot(111)
+            
+            categories = list(performance.keys())
+            counts = list(performance.values())
+            colors = ['#006400', '#DC143C', '#FF8C00', '#00008B']
+            
+            if sum(counts) > 0:
+                bars = ax.barh(categories, counts, color=colors)
+                ax.set_xlabel('Deliveries', fontsize=9, color='white')
+                ax.tick_params(axis='both', labelsize=8, colors='white')
+                ax.grid(True, alpha=0.3, axis='x', color='white')
+                ax.spines['bottom'].set_color('white')
+                ax.spines['top'].set_color('white')
+                ax.spines['left'].set_color('white')
+                ax.spines['right'].set_color('white')
+                
+                for bar, count in zip(bars, counts):
+                    if count > 0:
+                        ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2, 
+                               f' {count}', va='center', fontsize=9, fontweight='bold', color='white')
+            else:
+                ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes, color='white')
+            
+            self.bar_figure.patch.set_facecolor('#1e1e1e')
+            ax.set_facecolor('#1e1e1e')
+            self.bar_figure.tight_layout()
+            self.bar_canvas.draw()
+        except Exception as e:
+            print(f"Error updating bar chart: {e}")
+    
+    def show_edit_dialog(self, delivery_id):
+        """Show edit dialog for delivery"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QDialogButtonBox, QInputDialog
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Edit Delivery - {delivery_id}")
+        dialog.setMinimumWidth(400)
+        layout = QVBoxLayout()
+        
+        # Title
+        title = QLabel(f"<h3>Update {delivery_id}</h3>")
+        layout.addWidget(title)
+        
+        # Update Status Section
+        status_group = QGroupBox("Update Status")
+        status_layout = QVBoxLayout()
+        
+        status_combo = QComboBox()
+        status_combo.addItems(["In Transit", "Delivered", "Delayed", "Preparing for Shipment"])
+        status_layout.addWidget(status_combo)
+        
+        update_status_btn = QPushButton("Update Status")
+        update_status_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 8px;")
+        status_layout.addWidget(update_status_btn)
+        
+        status_group.setLayout(status_layout)
+        layout.addWidget(status_group)
+        
+        # Update Location Section
+        location_group = QGroupBox("Update Location")
+        location_layout = QVBoxLayout()
+        
+        loc_layout = QHBoxLayout()
+        loc_layout.addWidget(QLabel("Lat:"))
+        lat_input = QLineEdit()
+        lat_input.setPlaceholderText("40.5")
+        loc_layout.addWidget(lat_input)
+        loc_layout.addWidget(QLabel("Lon:"))
+        lon_input = QLineEdit()
+        lon_input.setPlaceholderText("-74.5")
+        loc_layout.addWidget(lon_input)
+        location_layout.addLayout(loc_layout)
+        
+        update_loc_btn = QPushButton("Update Location")
+        update_loc_btn.setStyleSheet("background-color: #FF9800; color: white; padding: 8px;")
+        location_layout.addWidget(update_loc_btn)
+        
+        location_group.setLayout(location_layout)
+        layout.addWidget(location_group)
+        
+        # Close button
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        # Connect update buttons
+        def do_update_status():
+            try:
+                new_status = status_combo.currentText()
+                reason = ""
+                if new_status == "Delayed":
+                    reason, ok = QInputDialog.getText(dialog, "Delay Reason", "Please enter reason for delay:")
+                    if not ok or not reason:
+                        QMessageBox.warning(dialog, "Required", "Delay reason is required")
+                        return
+                
+                tx = self.bc.update_status(delivery_id, new_status, reason)
+                QMessageBox.information(dialog, "Success", f"Status updated to: {new_status}")
+                self.load_deliveries()
+                dialog.accept()
+            except Exception as e:
+                QMessageBox.warning(dialog, "Error", f"Failed to update status:\n{str(e)}")
+        
+        def do_update_location():
+            try:
+                lat = float(lat_input.text())
+                lon = float(lon_input.text())
+                tx = self.bc.update_location(delivery_id, lat, lon)
+                QMessageBox.information(dialog, "Success", f"Location updated to: ({lat}, {lon})")
+                self.load_deliveries()
+                dialog.accept()
+            except ValueError:
+                QMessageBox.warning(dialog, "Input Error", "Please enter valid coordinates")
+            except Exception as e:
+                QMessageBox.warning(dialog, "Error", f"Failed to update location:\n{str(e)}")
+        
+        update_status_btn.clicked.connect(do_update_status)
+        update_loc_btn.clicked.connect(do_update_location)
+        
+        dialog.setLayout(layout)
+        dialog.exec()
+    
+    def view_delivery_history(self, delivery_id):
+        """View delivery update history"""
+        if not self.bc:
+            return
+        
+        try:
+            from PySide6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QDialogButtonBox
+            from datetime import datetime
+            
+            status_history = self.bc.get_status_history(delivery_id)
+            location_history = self.bc.get_location_history(delivery_id)
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle(f"Update History - {delivery_id}")
+            dialog.setMinimumSize(500, 400)
+            layout = QVBoxLayout()
+            
+            history_text = QTextEdit()
+            history_text.setReadOnly(True)
+            
+            content = f"<h2>Delivery History: {delivery_id}</h2>"
+            
+            if status_history:
+                content += "<h3>Status Updates:</h3><ul>"
+                for update in reversed(status_history):
+                    timestamp = datetime.fromtimestamp(update['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+                    content += f"<li><b>{timestamp}</b> - Status changed to: <b>{update['status']}</b>"
+                    if update.get('reason'):
+                        content += f"<br>&nbsp;&nbsp;&nbsp;&nbsp;<i>Reason: {update['reason']}</i>"
+                    content += "</li>"
+                content += "</ul>"
+            else:
+                content += "<p>No status updates recorded.</p>"
+            
+            if location_history:
+                content += "<h3>Location Updates:</h3><ul>"
+                for update in reversed(location_history):
+                    timestamp = datetime.fromtimestamp(update['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+                    content += f"<li><b>{timestamp}</b> - Location: ({update['lat']:.4f}, {update['lon']:.4f})</li>"
+                content += "</ul>"
+            else:
+                content += "<p>No location updates recorded.</p>"
+            
+            history_text.setHtml(content)
+            layout.addWidget(history_text)
+            
+            buttons = QDialogButtonBox(QDialogButtonBox.Close)
+            buttons.rejected.connect(dialog.reject)
+            layout.addWidget(buttons)
+            
+            dialog.setLayout(layout)
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load history:\n{str(e)}")
+    
+    def toggle_columns(self):
+        """Show dialog to hide/show columns"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QCheckBox, QDialogButtonBox
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Hide/Show Columns")
+        layout = QVBoxLayout()
+        
+        checkboxes = []
+        for i in range(self.delivery_table.columnCount()):
+            header = self.delivery_table.horizontalHeaderItem(i).text()
+            checkbox = QCheckBox(header)
+            checkbox.setChecked(not self.delivery_table.isColumnHidden(i))
+            checkbox.col_index = i
+            checkboxes.append(checkbox)
+            layout.addWidget(checkbox)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        dialog.setLayout(layout)
+        
+        if dialog.exec():
+            for checkbox in checkboxes:
+                self.delivery_table.setColumnHidden(checkbox.col_index, not checkbox.isChecked())
+            self.statusBar().showMessage("Column visibility updated")
     
     def closeEvent(self, event):
         """Handle window close"""
