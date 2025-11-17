@@ -8,6 +8,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QTabWidget, QTextEdit)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
+
+# Add parent directory to path to import blockchain_helper
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from blockchain_helper import BlockchainManager
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -157,11 +160,11 @@ class SupplyChainDashboard(QMainWindow):
         
         # Table
         self.delivery_table = QTableWidget()
-        self.delivery_table.setColumnCount(13)
+        self.delivery_table.setColumnCount(14)
         self.delivery_table.setHorizontalHeaderLabels([
             "ID", "Status", "On-Time Status", "Origin Lat", "Origin Lon", 
             "Dest Lat", "Dest Lon", "Current Lat", "Current Lon", 
-            "Timestamp", "Expected Date", "Actual Date", "History"
+            "Timestamp", "Expected Date", "Actual Date", "Edit", "History"
         ])
         self.delivery_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.delivery_table.setSortingEnabled(True)
@@ -471,11 +474,17 @@ class SupplyChainDashboard(QMainWindow):
         actual_str = datetime.fromtimestamp(delivery['actual_delivery_date']).strftime('%Y-%m-%d %H:%M') if delivery['actual_delivery_date'] > 0 else 'N/A'
         self.delivery_table.setItem(row, 11, QTableWidgetItem(actual_str))
         
+        # Edit button
+        edit_btn = QPushButton("Edit")
+        edit_btn.setStyleSheet("background-color: #FF9800; color: white; padding: 5px;")
+        edit_btn.clicked.connect(lambda checked, d_id=delivery['id']: self.show_edit_dialog(d_id))
+        self.delivery_table.setCellWidget(row, 12, edit_btn)
+        
         # View History button
         history_btn = QPushButton("View History")
         history_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 5px;")
         history_btn.clicked.connect(lambda checked, d_id=delivery['id']: self.view_delivery_history(d_id))
-        self.delivery_table.setCellWidget(row, 12, history_btn)
+        self.delivery_table.setCellWidget(row, 13, history_btn)
     
     def add_delivery(self):
         """Add new delivery to blockchain"""
@@ -985,6 +994,98 @@ class SupplyChainDashboard(QMainWindow):
             self.bar_canvas.draw()
         except Exception as e:
             print(f"Error updating bar chart: {e}")
+    
+    def show_edit_dialog(self, delivery_id):
+        """Show edit dialog for delivery"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QDialogButtonBox, QInputDialog
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Edit Delivery - {delivery_id}")
+        dialog.setMinimumWidth(400)
+        layout = QVBoxLayout()
+        
+        # Title
+        title = QLabel(f"<h3>Update {delivery_id}</h3>")
+        layout.addWidget(title)
+        
+        # Update Status Section
+        status_group = QGroupBox("Update Status")
+        status_layout = QVBoxLayout()
+        
+        status_combo = QComboBox()
+        status_combo.addItems(["In Transit", "Delivered", "Delayed", "Preparing for Shipment"])
+        status_layout.addWidget(status_combo)
+        
+        update_status_btn = QPushButton("Update Status")
+        update_status_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 8px;")
+        status_layout.addWidget(update_status_btn)
+        
+        status_group.setLayout(status_layout)
+        layout.addWidget(status_group)
+        
+        # Update Location Section
+        location_group = QGroupBox("Update Location")
+        location_layout = QVBoxLayout()
+        
+        loc_layout = QHBoxLayout()
+        loc_layout.addWidget(QLabel("Lat:"))
+        lat_input = QLineEdit()
+        lat_input.setPlaceholderText("40.5")
+        loc_layout.addWidget(lat_input)
+        loc_layout.addWidget(QLabel("Lon:"))
+        lon_input = QLineEdit()
+        lon_input.setPlaceholderText("-74.5")
+        loc_layout.addWidget(lon_input)
+        location_layout.addLayout(loc_layout)
+        
+        update_loc_btn = QPushButton("Update Location")
+        update_loc_btn.setStyleSheet("background-color: #FF9800; color: white; padding: 8px;")
+        location_layout.addWidget(update_loc_btn)
+        
+        location_group.setLayout(location_layout)
+        layout.addWidget(location_group)
+        
+        # Close button
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        # Connect update buttons
+        def do_update_status():
+            try:
+                new_status = status_combo.currentText()
+                reason = ""
+                if new_status == "Delayed":
+                    reason, ok = QInputDialog.getText(dialog, "Delay Reason", "Please enter reason for delay:")
+                    if not ok or not reason:
+                        QMessageBox.warning(dialog, "Required", "Delay reason is required")
+                        return
+                
+                tx = self.bc.update_status(delivery_id, new_status, reason)
+                QMessageBox.information(dialog, "Success", f"Status updated to: {new_status}")
+                self.load_deliveries()
+                dialog.accept()
+            except Exception as e:
+                QMessageBox.warning(dialog, "Error", f"Failed to update status:\n{str(e)}")
+        
+        def do_update_location():
+            try:
+                lat = float(lat_input.text())
+                lon = float(lon_input.text())
+                tx = self.bc.update_location(delivery_id, lat, lon)
+                QMessageBox.information(dialog, "Success", f"Location updated to: ({lat}, {lon})")
+                self.load_deliveries()
+                dialog.accept()
+            except ValueError:
+                QMessageBox.warning(dialog, "Input Error", "Please enter valid coordinates")
+            except Exception as e:
+                QMessageBox.warning(dialog, "Error", f"Failed to update location:\n{str(e)}")
+        
+        update_status_btn.clicked.connect(do_update_status)
+        update_loc_btn.clicked.connect(do_update_location)
+        
+        dialog.setLayout(layout)
+        dialog.exec()
     
     def view_delivery_history(self, delivery_id):
         """View delivery update history"""
