@@ -2,6 +2,7 @@ import sys
 import os
 import webbrowser
 import folium
+import json
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QTableWidget, QTableWidgetItem, QPushButton,
                                QLabel, QLineEdit, QComboBox, QGroupBox, QMessageBox,
@@ -12,6 +13,7 @@ from PySide6.QtGui import QFont
 # Add parent directory to path to import blockchain_helper
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from blockchain_helper import BlockchainManager
+from ml_predictor import predict_delay
 import matplotlib
 matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
@@ -43,6 +45,7 @@ class SupplyChainDashboard(QMainWindow):
         tabs.addTab(self.create_view_tab(), "View Deliveries")
         tabs.addTab(self.create_add_tab(), "Add Delivery")
         tabs.addTab(self.create_update_tab(), "Update Delivery")
+        tabs.addTab(self.create_ml_tab(), "Delay Risk & ML")
         tabs.addTab(self.create_map_tab(), "Live Map")
         main_layout.addWidget(tabs)
         
@@ -140,8 +143,8 @@ class SupplyChainDashboard(QMainWindow):
         search_btn.clicked.connect(self.search_delivery)
         search_layout.addWidget(search_btn)
         
-        load_all_btn = QPushButton("Load First 10")
-        load_all_btn.clicked.connect(self.load_deliveries)
+        load_all_btn = QPushButton("Load All Deliveries")
+        load_all_btn.clicked.connect(self.load_all_deliveries)
         search_layout.addWidget(load_all_btn)
         
         search_layout.addStretch()
@@ -160,9 +163,9 @@ class SupplyChainDashboard(QMainWindow):
         
         # Table
         self.delivery_table = QTableWidget()
-        self.delivery_table.setColumnCount(14)
+        self.delivery_table.setColumnCount(15)
         self.delivery_table.setHorizontalHeaderLabels([
-            "ID", "Status", "On-Time Status", "Origin Lat", "Origin Lon", 
+            "ID", "Delay Risk %", "Status", "On-Time Status", "Origin Lat", "Origin Lon", 
             "Dest Lat", "Dest Lon", "Current Lat", "Current Lon", 
             "Timestamp", "Expected Date", "Actual Date", "Edit", "History"
         ])
@@ -171,12 +174,12 @@ class SupplyChainDashboard(QMainWindow):
         self.delivery_table.horizontalHeader().setStretchLastSection(True)
         
         # Hide coordinate columns by default
-        self.delivery_table.setColumnHidden(3, True)  # Origin Lat
-        self.delivery_table.setColumnHidden(4, True)  # Origin Lon
-        self.delivery_table.setColumnHidden(5, True)  # Dest Lat
-        self.delivery_table.setColumnHidden(6, True)  # Dest Lon
-        self.delivery_table.setColumnHidden(7, True)  # Current Lat
-        self.delivery_table.setColumnHidden(8, True)  # Current Lon
+        self.delivery_table.setColumnHidden(4, True)  # Origin Lat
+        self.delivery_table.setColumnHidden(5, True)  # Origin Lon
+        self.delivery_table.setColumnHidden(6, True)  # Dest Lat
+        self.delivery_table.setColumnHidden(7, True)  # Dest Lon
+        self.delivery_table.setColumnHidden(8, True)  # Current Lat
+        self.delivery_table.setColumnHidden(9, True)  # Current Lon
         
         right_layout.addWidget(self.delivery_table)
         
@@ -354,6 +357,26 @@ class SupplyChainDashboard(QMainWindow):
         widget.setLayout(layout)
         return widget
     
+    def load_risk_data(self):
+        """Load risk data from JSON file"""
+        try:
+            with open('risk_data.json', 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    
+    def save_risk_data(self, data):
+        """Save risk data to JSON file"""
+        with open('risk_data.json', 'w') as f:
+            json.dump(data, f, indent=2)
+    
+    def get_risk_values(self, delivery_id):
+        """Get weather and traffic risk for a delivery"""
+        risk_data = self.load_risk_data()
+        if delivery_id in risk_data:
+            return risk_data[delivery_id].get('weather', 2), risk_data[delivery_id].get('traffic', 2)
+        return 2, 2
+    
     def connect_blockchain(self):
         """Connect to blockchain"""
         try:
@@ -363,7 +386,7 @@ class SupplyChainDashboard(QMainWindow):
             self.contract_label.setText(f"Contract: {self.bc.contract.address[:10]}...")
             self.statusBar().showMessage("Connected to blockchain")
             # Auto-load deliveries and charts
-            self.load_deliveries()
+            self.load_all_deliveries()
         except Exception as e:
             self.blockchain_status.setText("🔴 Blockchain: Disconnected")
             self.blockchain_status.setStyleSheet("color: red;")
@@ -414,12 +437,47 @@ class SupplyChainDashboard(QMainWindow):
         self.update_delivery_count()
         self.update_charts()
     
+    def load_all_deliveries(self):
+        """Load all deliveries"""
+        if not self.bc:
+            QMessageBox.warning(self, "Connection Error", "Not connected to blockchain")
+            return
+        
+        self.delivery_table.setRowCount(0)
+        count = 0
+        empty_count = 0
+        i = 1
+        
+        # Stop after finding 50 consecutive empty IDs
+        while empty_count < 50 and i < 10000:
+            delivery_id = f'D{i:04d}'
+            try:
+                delivery = self.bc.get_delivery(delivery_id)
+                if delivery['id']:
+                    row = self.delivery_table.rowCount()
+                    self.delivery_table.insertRow(row)
+                    self.populate_table_row(row, delivery)
+                    count += 1
+                    empty_count = 0
+                else:
+                    empty_count += 1
+            except:
+                empty_count += 1
+            i += 1
+        
+        self.statusBar().showMessage(f"Loaded {count} deliveries from blockchain")
+        self.update_delivery_count()
+        self.update_charts()
+    
     def populate_table_row(self, row, delivery):
         """Populate a table row with delivery data"""
         from PySide6.QtGui import QColor
         from datetime import datetime
         
         self.delivery_table.setItem(row, 0, QTableWidgetItem(delivery['id']))
+        
+        # Delay Risk - initially empty
+        self.delivery_table.setItem(row, 1, QTableWidgetItem("-"))
         
         # Color-coded status
         status_item = QTableWidgetItem(delivery['status'])
@@ -431,7 +489,7 @@ class SupplyChainDashboard(QMainWindow):
         }
         if delivery['status'] in color_map:
             status_item.setBackground(color_map[delivery['status']])
-        self.delivery_table.setItem(row, 1, status_item)
+        self.delivery_table.setItem(row, 2, status_item)
         
         # On-Time Status
         import time as time_module
@@ -456,35 +514,35 @@ class SupplyChainDashboard(QMainWindow):
         
         on_time_item = QTableWidgetItem(on_time_status)
         on_time_item.setBackground(on_time_color)
-        self.delivery_table.setItem(row, 2, on_time_item)
+        self.delivery_table.setItem(row, 3, on_time_item)
         
-        self.delivery_table.setItem(row, 3, QTableWidgetItem(f"{delivery['origin_lat']:.4f}"))
-        self.delivery_table.setItem(row, 4, QTableWidgetItem(f"{delivery['origin_lon']:.4f}"))
-        self.delivery_table.setItem(row, 5, QTableWidgetItem(f"{delivery['dest_lat']:.4f}"))
-        self.delivery_table.setItem(row, 6, QTableWidgetItem(f"{delivery['dest_lon']:.4f}"))
-        self.delivery_table.setItem(row, 7, QTableWidgetItem(f"{delivery['current_lat']:.4f}"))
-        self.delivery_table.setItem(row, 8, QTableWidgetItem(f"{delivery['current_lon']:.4f}"))
-        self.delivery_table.setItem(row, 9, QTableWidgetItem(str(delivery['timestamp'])))
+        self.delivery_table.setItem(row, 4, QTableWidgetItem(f"{delivery['origin_lat']:.4f}"))
+        self.delivery_table.setItem(row, 5, QTableWidgetItem(f"{delivery['origin_lon']:.4f}"))
+        self.delivery_table.setItem(row, 6, QTableWidgetItem(f"{delivery['dest_lat']:.4f}"))
+        self.delivery_table.setItem(row, 7, QTableWidgetItem(f"{delivery['dest_lon']:.4f}"))
+        self.delivery_table.setItem(row, 8, QTableWidgetItem(f"{delivery['current_lat']:.4f}"))
+        self.delivery_table.setItem(row, 9, QTableWidgetItem(f"{delivery['current_lon']:.4f}"))
+        self.delivery_table.setItem(row, 10, QTableWidgetItem(str(delivery['timestamp'])))
         
         # Expected delivery date
         expected_str = datetime.fromtimestamp(delivery['expected_delivery_date']).strftime('%Y-%m-%d %H:%M') if delivery['expected_delivery_date'] > 0 else 'N/A'
-        self.delivery_table.setItem(row, 10, QTableWidgetItem(expected_str))
+        self.delivery_table.setItem(row, 11, QTableWidgetItem(expected_str))
         
         # Actual delivery date
         actual_str = datetime.fromtimestamp(delivery['actual_delivery_date']).strftime('%Y-%m-%d %H:%M') if delivery['actual_delivery_date'] > 0 else 'N/A'
-        self.delivery_table.setItem(row, 11, QTableWidgetItem(actual_str))
+        self.delivery_table.setItem(row, 12, QTableWidgetItem(actual_str))
         
         # Edit button
         edit_btn = QPushButton("Edit")
         edit_btn.setStyleSheet("background-color: #FF9800; color: white; padding: 5px;")
         edit_btn.clicked.connect(lambda checked, d_id=delivery['id']: self.show_edit_dialog(d_id))
-        self.delivery_table.setCellWidget(row, 12, edit_btn)
+        self.delivery_table.setCellWidget(row, 13, edit_btn)
         
         # View History button
         history_btn = QPushButton("View History")
         history_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 5px;")
         history_btn.clicked.connect(lambda checked, d_id=delivery['id']: self.view_delivery_history(d_id))
-        self.delivery_table.setCellWidget(row, 13, history_btn)
+        self.delivery_table.setCellWidget(row, 14, history_btn)
     
     def add_delivery(self):
         """Add new delivery to blockchain"""
@@ -644,6 +702,217 @@ class SupplyChainDashboard(QMainWindow):
                     
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to wipe blockchain:\n{str(e)}\n\nYou may need to manually restart Ganache.")
+    
+
+    def create_ml_tab(self):
+        """Tab for risk factors and delay prediction"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        # Single delivery section
+        single_group = QGroupBox("Calculate Risk for Single Delivery")
+        single_layout = QVBoxLayout()
+        
+        # Delivery ID
+        id_layout = QHBoxLayout()
+        id_layout.addWidget(QLabel("Delivery ID:"))
+        self.ml_single_id = QLineEdit()
+        self.ml_single_id.setPlaceholderText("e.g., D0001")
+        id_layout.addWidget(self.ml_single_id)
+        single_layout.addLayout(id_layout)
+        
+        # Weather Risk
+        weather_layout = QHBoxLayout()
+        weather_layout.addWidget(QLabel("Weather Risk (1-5):"))
+        self.ml_weather = QComboBox()
+        self.ml_weather.addItems(["1", "2", "3", "4", "5"])
+        self.ml_weather.setCurrentIndex(1)
+        weather_layout.addWidget(self.ml_weather)
+        weather_layout.addWidget(QLabel("(1=Clear, 5=Severe)"))
+        weather_layout.addStretch()
+        single_layout.addLayout(weather_layout)
+        
+        # Traffic Risk
+        traffic_layout = QHBoxLayout()
+        traffic_layout.addWidget(QLabel("Traffic Difficulty (1-5):"))
+        self.ml_traffic = QComboBox()
+        self.ml_traffic.addItems(["1", "2", "3", "4", "5"])
+        self.ml_traffic.setCurrentIndex(1)
+        traffic_layout.addWidget(self.ml_traffic)
+        traffic_layout.addWidget(QLabel("(1=Light, 5=Heavy)"))
+        traffic_layout.addStretch()
+        single_layout.addLayout(traffic_layout)
+        
+        # Calculate button
+        calc_single_btn = QPushButton("Calculate Delay Risk")
+        calc_single_btn.clicked.connect(self.calculate_single_delay_risk)
+        calc_single_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 10px; font-size: 14px;")
+        single_layout.addWidget(calc_single_btn)
+        
+        # Result display
+        self.ml_single_result = QLabel("Result: -")
+        self.ml_single_result.setAlignment(Qt.AlignCenter)
+        self.ml_single_result.setStyleSheet("font-size: 18px; font-weight: bold; padding: 15px; border: 2px solid #ccc; border-radius: 5px;")
+        single_layout.addWidget(self.ml_single_result)
+        
+        single_group.setLayout(single_layout)
+        layout.addWidget(single_group)
+        
+        # Batch calculation section
+        batch_group = QGroupBox("Calculate Risk for All Loaded Deliveries")
+        batch_layout = QVBoxLayout()
+        
+        calc_all_btn = QPushButton("Calculate Delay Risk for All")
+        calc_all_btn.clicked.connect(self.calculate_all_delay_risks)
+        calc_all_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 15px; font-size: 14px;")
+        batch_layout.addWidget(calc_all_btn)
+        
+        self.ml_status = QLabel("Status: Ready")
+        self.ml_status.setAlignment(Qt.AlignCenter)
+        batch_layout.addWidget(self.ml_status)
+        
+        batch_group.setLayout(batch_layout)
+        layout.addWidget(batch_group)
+        
+        layout.addStretch()
+        widget.setLayout(layout)
+        return widget
+    
+    def calculate_single_delay_risk(self):
+        """Calculate delay risk for a single delivery"""
+        from PySide6.QtGui import QColor
+        
+        delivery_id = self.ml_single_id.text().strip()
+        if not delivery_id:
+            QMessageBox.warning(self, "Input Error", "Please enter a Delivery ID")
+            return
+        
+        if not self.bc:
+            QMessageBox.warning(self, "Connection Error", "Not connected to blockchain")
+            return
+        
+        try:
+            # Get delivery data
+            delivery = self.bc.get_delivery(delivery_id)
+            if not delivery['id']:
+                QMessageBox.warning(self, "Not Found", f"Delivery '{delivery_id}' not found")
+                return
+            
+            # Get risk values from form
+            weather_risk = int(self.ml_weather.currentText())
+            traffic_risk = int(self.ml_traffic.currentText())
+            
+            # Save risk factors
+            risk_data = self.load_risk_data()
+            risk_data[delivery_id] = {'weather': weather_risk, 'traffic': traffic_risk}
+            self.save_risk_data(risk_data)
+            
+            # If already delivered, risk is 0
+            if delivery['status'] == 'Delivered':
+                delay_prob = 0.0
+            else:
+                # Predict
+                delay_prob = predict_delay(delivery, weather_risk, traffic_risk)
+            
+            if delay_prob is not None:
+                # Determine risk level and color
+                if delay_prob < 30:
+                    risk_level = "Low Risk"
+                    color = "background-color: #4CAF50; color: white;"
+                elif delay_prob < 60:
+                    risk_level = "Medium Risk"
+                    color = "background-color: #FF9800; color: white;"
+                else:
+                    risk_level = "High Risk"
+                    color = "background-color: #f44336; color: white;"
+                
+                self.ml_single_result.setText(f"Delay Probability: {delay_prob:.1f}% - {risk_level}")
+                self.ml_single_result.setStyleSheet(f"font-size: 18px; font-weight: bold; padding: 15px; border-radius: 5px; {color}")
+                
+                # Update table if delivery is loaded
+                for row in range(self.delivery_table.rowCount()):
+                    item = self.delivery_table.item(row, 0)
+                    if item and item.text() == delivery_id:
+                        risk_item = QTableWidgetItem(f"{delay_prob:.1f}%")
+                        if delay_prob < 30:
+                            risk_item.setBackground(QColor(0, 100, 0))
+                        elif delay_prob < 60:
+                            risk_item.setBackground(QColor(255, 140, 0))
+                        else:
+                            risk_item.setBackground(QColor(220, 20, 60))
+                        self.delivery_table.setItem(row, 1, risk_item)
+                        break
+                
+                QMessageBox.information(self, "Success", 
+                    f"Delay risk calculated: {delay_prob:.1f}%\nRisk factors saved for {delivery_id}")
+            else:
+                self.ml_single_result.setText("Error: Prediction failed")
+                self.ml_single_result.setStyleSheet("font-size: 18px; font-weight: bold; padding: 15px; border: 2px solid #f44336; border-radius: 5px; color: #f44336;")
+                QMessageBox.warning(self, "Error", "Failed to calculate prediction. Check Julia installation.")
+        
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to calculate risk:\n{str(e)}")
+    
+    def calculate_all_delay_risks(self):
+        """Calculate delay risk for all deliveries in table"""
+        from PySide6.QtGui import QColor
+        
+        if not self.bc:
+            QMessageBox.warning(self, "Connection Error", "Not connected to blockchain")
+            return
+        
+        self.ml_status.setText("Status: Calculating predictions...")
+        
+        success_count = 0
+        fail_count = 0
+        
+        # Process each row in the table
+        for row in range(self.delivery_table.rowCount()):
+            delivery_id_item = self.delivery_table.item(row, 0)
+            if not delivery_id_item:
+                continue
+            
+            delivery_id = delivery_id_item.text()
+            
+            try:
+                # Get delivery data
+                delivery = self.bc.get_delivery(delivery_id)
+                weather_risk, traffic_risk = self.get_risk_values(delivery_id)
+                
+                # If already delivered, risk is 0
+                if delivery['status'] == 'Delivered':
+                    delay_prob = 0.0
+                else:
+                    # Predict
+                    delay_prob = predict_delay(delivery, weather_risk, traffic_risk)
+                
+                if delay_prob is not None:
+                    # Update table
+                    risk_item = QTableWidgetItem(f"{delay_prob:.1f}%")
+                    if delay_prob < 30:
+                        risk_item.setBackground(QColor(0, 100, 0))
+                    elif delay_prob < 60:
+                        risk_item.setBackground(QColor(255, 140, 0))
+                    else:
+                        risk_item.setBackground(QColor(220, 20, 60))
+                    
+                    self.delivery_table.setItem(row, 1, risk_item)
+                    success_count += 1
+                else:
+                    self.delivery_table.setItem(row, 1, QTableWidgetItem("Error"))
+                    fail_count += 1
+            except Exception as e:
+                self.delivery_table.setItem(row, 1, QTableWidgetItem("Error"))
+                fail_count += 1
+        
+        self.ml_status.setText(f"Status: Complete - {success_count} successful, {fail_count} failed")
+        
+        if success_count > 0:
+            QMessageBox.information(self, "Predictions Complete", 
+                f"Calculated delay risk for {success_count} deliveries.\nCheck the View Deliveries tab to see results.")
+        else:
+            QMessageBox.warning(self, "Prediction Failed", 
+                "Failed to calculate predictions. Make sure Julia is installed and the model is trained.")
     
     def create_map_tab(self):
         """Tab for interactive map visualization"""
@@ -834,13 +1103,20 @@ class SupplyChainDashboard(QMainWindow):
             return
         
         count = 0
-        for i in range(1, 101):
+        empty_count = 0
+        i = 1
+        
+        while empty_count < 50 and i < 10000:
             try:
                 delivery = self.bc.get_delivery(f'D{i:04d}')
                 if delivery['id']:
                     count += 1
+                    empty_count = 0
+                else:
+                    empty_count += 1
             except:
-                pass
+                empty_count += 1
+            i += 1
         
         self.delivery_count_badge.setText(f"📦 Deliveries: {count}")
     
@@ -860,16 +1136,24 @@ class SupplyChainDashboard(QMainWindow):
             total_time = 0
             count = 0
             
-            for i in range(1, 101):
+            empty_count = 0
+            i = 1
+            while empty_count < 50 and i < 10000:
                 delivery_id = f'D{i:04d}'
                 try:
                     delivery = self.bc.get_delivery(delivery_id)
+                    if not delivery['id']:
+                        empty_count += 1
+                        i += 1
+                        continue
+                    empty_count = 0
                     if delivery['status'] == 'Delivered' and delivery['actual_delivery_date'] > 0:
                         delivery_time = delivery['actual_delivery_date'] - delivery['timestamp']
                         total_time += delivery_time
                         count += 1
                 except:
-                    pass
+                    empty_count += 1
+                i += 1
             
             if count > 0:
                 avg_seconds = total_time / count
@@ -893,14 +1177,22 @@ class SupplyChainDashboard(QMainWindow):
         try:
             status_counts = {'In Transit': 0, 'Delivered': 0, 'Delayed': 0, 'Preparing for Shipment': 0}
             
-            for i in range(1, 101):
+            empty_count = 0
+            i = 1
+            while empty_count < 50 and i < 10000:
                 delivery_id = f'D{i:04d}'
                 try:
                     delivery = self.bc.get_delivery(delivery_id)
-                    if delivery['id'] and delivery['status'] in status_counts:
+                    if not delivery['id']:
+                        empty_count += 1
+                        i += 1
+                        continue
+                    empty_count = 0
+                    if delivery['status'] in status_counts:
                         status_counts[delivery['status']] += 1
                 except:
-                    pass
+                    empty_count += 1
+                i += 1
             
             self.pie_figure.clear()
             ax = self.pie_figure.add_subplot(111)
@@ -941,12 +1233,17 @@ class SupplyChainDashboard(QMainWindow):
             
             performance = {'On-Time': 0, 'Late': 0, 'At Risk': 0, 'On Track': 0}
             
-            for i in range(1, 101):
+            empty_count = 0
+            i = 1
+            while empty_count < 50 and i < 10000:
                 delivery_id = f'D{i:04d}'
                 try:
                     delivery = self.bc.get_delivery(delivery_id)
                     if not delivery['id']:
+                        empty_count += 1
+                        i += 1
                         continue
+                    empty_count = 0
                     
                     expected = delivery['expected_delivery_date']
                     actual = delivery['actual_delivery_date']
@@ -962,7 +1259,8 @@ class SupplyChainDashboard(QMainWindow):
                         else:
                             performance['On Track'] += 1
                 except:
-                    pass
+                    empty_count += 1
+                i += 1
             
             self.bar_figure.clear()
             ax = self.bar_figure.add_subplot(111)
